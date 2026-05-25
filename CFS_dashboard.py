@@ -221,7 +221,7 @@ def add_cumulative_hover(fig, category_label, orientation="v"):
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
-    file_path = "./data/CFS_QUESTIONNAIRE_-_Tdh_Kenya_Draft3.xlsx"
+    file_path = "./data/CFS_QUESTIONNAIRE_-_Tdh_Kenya_Draft4.xlsx"
 
     df = pd.read_excel(file_path)
     df.columns = df.columns.str.strip()
