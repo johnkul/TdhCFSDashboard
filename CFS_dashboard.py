@@ -8,7 +8,7 @@ import plotly.express as px
 import streamlit as st
 
 
-DATA_PATH = Path(r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data\CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+DATA_PATH = Path("./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
 SHEET_NAME = "Transformed Data"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
 CACHE_VERSION = "cfs-dashboard-prepared-v5"
