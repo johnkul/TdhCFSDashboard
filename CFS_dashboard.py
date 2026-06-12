@@ -8,7 +8,7 @@ import plotly.express as px
 import streamlit as st
 
 
-DATA_PATH = Path("./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+DATA_PATH = Path(r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data\CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
 SHEET_NAME = "Transformed Data"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
 CACHE_VERSION = "cfs-dashboard-prepared-v5"
@@ -860,6 +860,38 @@ def metric_card(label, value, helper=None):
     )
 
 
+def insight_card(label, value, helper=None):
+    helper_html = f"<div class='insight-helper'>{helper}</div>" if helper else ""
+    st.markdown(
+        f"""
+        <div class="insight-card">
+            <div class="insight-label">{label}</div>
+            <div class="insight-value">{value}</div>
+            {helper_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def top_category(data, column, exclude=None):
+    if data.empty or column not in data.columns:
+        return "N/A", 0
+    exclude = set(exclude or [])
+    series = data[column].astype("string")
+    series = series[~series.isin(exclude)]
+    counts = series.value_counts(dropna=True)
+    if counts.empty:
+        return "N/A", 0
+    return str(counts.index[0]), int(counts.iloc[0])
+
+
+def yes_count(data, column):
+    if data.empty or column not in data.columns:
+        return 0
+    return int(data[column].astype("string").eq("Yes").sum())
+
+
 st.set_page_config(
     page_title="Tdh Kenya CFS Dashboard",
     page_icon="CFS",
@@ -971,6 +1003,63 @@ st.markdown(
         color: #475569;
         font-size: .78rem;
         margin-top: .15rem;
+    }
+    .quick-insights {
+        margin: .6rem 0 1.1rem 0;
+        padding: 1.05rem;
+        border: 1px solid #d5dee9;
+        border-radius: 8px;
+        background: #f8fbff;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, .06);
+    }
+    .section-heading {
+        margin: 1.25rem 0 .55rem 0;
+        color: #0f172a;
+        font-size: 1.55rem;
+        line-height: 1.25;
+        font-weight: 900;
+    }
+    .dashboard-section-heading {
+        font-size: 1.75rem;
+        letter-spacing: 0;
+        margin-top: 1.35rem;
+    }
+    .section-subtitle {
+        margin: -.25rem 0 .8rem 0;
+        color: #334155;
+        font-size: 1rem;
+        font-weight: 700;
+    }
+    .insight-card {
+        min-height: 104px;
+        padding: .95rem 1rem;
+        border: 1px solid #d5dee9;
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+    }
+    .insight-label {
+        color: #334155;
+        font-size: .78rem;
+        font-weight: 800;
+        text-transform: uppercase;
+    }
+    .insight-value {
+        color: #0f172a;
+        font-size: 1.28rem;
+        font-weight: 900;
+        margin-top: .25rem;
+        line-height: 1.25;
+    }
+    .insight-helper {
+        color: #475569;
+        font-size: .78rem;
+        margin-top: .2rem;
+    }
+    div[data-testid="stTabs"] button p {
+        color: #111827 !important;
+        font-weight: 850 !important;
+        font-size: .98rem !important;
     }
     .section-block {
         padding: .9rem 0 .25rem 0;
@@ -1197,6 +1286,75 @@ with k4:
 with k5:
     metric_card("Average child age", f"{avg_age:.1f}" if pd.notna(avg_age) else "N/A", "Years")
 
+top_camp, top_camp_count = top_category(filtered, "settlement_clean", exclude=[MISSING])
+top_site, top_site_count = top_category(filtered, "cfs_clean", exclude=[MISSING])
+top_gender, top_gender_count = top_category(filtered, "gender_clean", exclude=[MISSING])
+top_age, top_age_count = top_category(filtered, "age_group", exclude=[MISSING])
+top_issue, top_issue_count = top_category(issue_context, "issue_clean", exclude=[MISSING])
+top_support, top_support_count = top_category(support_context, "support_clean", exclude=[MISSING])
+top_game, top_game_count = top_category(filtered, "games_played_clean", exclude=[MISSING])
+top_referral_dest, top_referral_dest_count = top_category(
+    filtered[filtered["referral_made_clean"].astype("string").eq("Yes")],
+    "referral_destination_grouped",
+    exclude=[MISSING],
+)
+
+st.markdown("<div class='section-heading'>Quick Insights</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-subtitle'>Fast outlook for the currently filtered dataset.</div>",
+    unsafe_allow_html=True,
+)
+try:
+    quick_panel = st.container(border=True)
+except TypeError:
+    quick_panel = st.container()
+with quick_panel:
+    st.markdown("<div class='quick-insights'>", unsafe_allow_html=True)
+    qi1, qi2, qi3, qi4 = st.tabs(["Coverage", "Demographics", "Protection & Support", "Engagement & Referrals"])
+    with qi1:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            insight_card("Camp with most records", top_camp, f"{top_camp_count:,} records")
+        with c2:
+            insight_card("Leading CFS / site", top_site, f"{top_site_count:,} records")
+        with c3:
+            insight_card("CFS / sites represented", f"{filtered['cfs_clean'].nunique():,}", "Filtered data")
+        with c4:
+            insight_card("Staff represented", f"{filtered['staff_clean'].nunique():,}", "Filtered data")
+    with qi2:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            insight_card("Largest gender group", top_gender, f"{top_gender_count:,} records")
+        with c2:
+            insight_card("Largest age group", top_age, f"{top_age_count:,} records")
+        with c3:
+            insight_card("Children with disability", f"{yes_count(filtered, 'disability_status_clean'):,}", f"{disability_rate:.1%} of filtered records")
+        with c4:
+            insight_card("First-time visitors", f"{yes_count(filtered, 'first_visit_clean'):,}", f"{first_visit_rate:.1%} of filtered records")
+    with qi3:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            insight_card("Most reported issue", top_issue, f"{top_issue_count:,} mentions")
+        with c2:
+            insight_card("Most common support", top_support, f"{top_support_count:,} mentions")
+        with c3:
+            insight_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count")
+        with c4:
+            insight_card("Support mentions", f"{len(support_context):,}", "Multi-response count")
+    with qi4:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            insight_card("Top activity / game", top_game, f"{top_game_count:,} records")
+        with c2:
+            insight_card("Referrals made", f"{yes_count(filtered, 'referral_made_clean'):,}", f"{referral_rate:.1%} of filtered records")
+        with c3:
+            insight_card("Top referral destination", top_referral_dest, f"{top_referral_dest_count:,} records")
+        with c4:
+            insight_card("External agency records", f"{filtered['external_referral_agency_clean'].astype('string').ne(MISSING).sum():,}", "Where agency is specified")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div class='section-heading dashboard-section-heading'>Dashboard Section</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-subtitle'>Select the analytical view you want to explore.</div>", unsafe_allow_html=True)
 section = st.radio(
     "Dashboard section",
     [
@@ -1207,6 +1365,7 @@ section = st.radio(
         "Data Quality & Harmonization",
     ],
     horizontal=True,
+    label_visibility="collapsed",
 )
 
 if section == "CPVs Data Distribution":
