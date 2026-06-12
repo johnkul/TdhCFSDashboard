@@ -8,7 +8,7 @@ import plotly.express as px
 import streamlit as st
 
 
-DATA_PATH = Path("./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+DATA_PATH = Path(r"./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
 SHEET_NAME = "Transformed Data"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
 CACHE_VERSION = "cfs-dashboard-prepared-v5"
@@ -505,6 +505,41 @@ def table_with_total(data, index, columns=None, value_col="record_id"):
         table = table.sort_values(total_col, ascending=False)
     table.loc["Grand Total"] = table.sum(numeric_only=True)
     return table
+
+
+def add_interview_date_columns(table, data, group_col, date_col):
+    if table.empty or data.empty or group_col not in data.columns or date_col not in data.columns:
+        return table
+
+    out = table.copy()
+    date_summary = data.dropna(subset=[date_col]).groupby(group_col, observed=False)[date_col].agg(["min", "max"])
+
+    def fmt_date(value):
+        if pd.isna(value):
+            return ""
+        return pd.to_datetime(value).strftime("%d %b %Y")
+
+    first_dates = {}
+    latest_dates = {}
+    for row_label in out.index:
+        if str(row_label) == "Grand Total":
+            first_dates[row_label] = fmt_date(data[date_col].min())
+            latest_dates[row_label] = fmt_date(data[date_col].max())
+        elif row_label in date_summary.index:
+            first_dates[row_label] = fmt_date(date_summary.loc[row_label, "min"])
+            latest_dates[row_label] = fmt_date(date_summary.loc[row_label, "max"])
+        else:
+            first_dates[row_label] = ""
+            latest_dates[row_label] = ""
+
+    if isinstance(out.columns, pd.MultiIndex):
+        suffix = ("",) * (out.columns.nlevels - 1)
+        out[("First Date of Interview",) + suffix] = pd.Series(first_dates)
+        out[("Latest Interview Date",) + suffix] = pd.Series(latest_dates)
+    else:
+        out["First Date of Interview"] = pd.Series(first_dates)
+        out["Latest Interview Date"] = pd.Series(latest_dates)
+    return out
 
 
 def label_has_missing(label):
@@ -1371,6 +1406,7 @@ section = st.radio(
 if section == "CPVs Data Distribution":
     st.subheader("CPV / Staff Data Submission")
     staff_table = table_with_total(filtered, ["staff_clean"], ["gender_clean"])
+    staff_table = add_interview_date_columns(staff_table, filtered, "staff_clean", "date")
     st.dataframe(style_total(staff_table), use_container_width=True)
     staff_chart = count_table(filtered, ["staff_clean", "gender_clean"])
     staff_chart = top_n_chart_control(staff_chart, "staff_clean", "staff", default=15)
