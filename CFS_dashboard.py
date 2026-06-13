@@ -1,5 +1,6 @@
 from pathlib import Path
 from difflib import SequenceMatcher
+from io import BytesIO
 import re
 import time
 
@@ -8,10 +9,12 @@ import plotly.express as px
 import streamlit as st
 
 
-DATA_PATH = Path(r"./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = Path(r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data\CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
 SHEET_NAME = "Transformed Data"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
-CACHE_VERSION = "cfs-dashboard-prepared-v5"
+CACHE_VERSION = "cfs-dashboard-prepared-v9"
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
@@ -207,6 +210,10 @@ AGENCY_MAP = {
     "dras and unchr": "UNHCR / DRS",
     "unhcr dras": "UNHCR / DRS",
     "dras unhcr": "UNHCR / DRS",
+    "lwf and dras": "LWF and DRS",
+    "lwf and drs": "LWF and DRS",
+    "dras and lwf": "DRS and LWF",
+    "drs and lwf": "DRS and LWF",
     "lwf": "LWF",
     "lwfl": "LWF",
     "lwf education": "LWF Education",
@@ -241,11 +248,29 @@ def smart_title(value):
     if pd.isna(value) or str(value).strip() == "":
         return MISSING
     text = re.sub(r"\s+", " ", str(value).strip())
-    upper_tokens = {"cfs", "tdh", "unhcr", "drs", "lwf", "hi", "wfp", "nrc", "drc", "rck", "krcs", "pss", "gbv"}
-    return " ".join(token.upper() if token.lower() in upper_tokens else token.capitalize() for token in text.split())
+    upper_tokens = {"cfs", "tdh", "unhcr", "drs", "dras", "lwf", "hi", "wfp", "nrc", "drc", "rck", "krcs", "pss", "gbv"}
+    lower_tokens = {"and", "or", "of", "the", "for", "to", "in", "by", "with", "at"}
+    titled = []
+    for token in text.split():
+        key = token.lower()
+        if key in upper_tokens:
+            titled.append("DRS" if key == "dras" else token.upper())
+        elif key in lower_tokens:
+            titled.append(key)
+        else:
+            titled.append(token.capitalize())
+    return " ".join(titled)
 
 
 def yes_no(value):
+    if pd.isna(value):
+        return MISSING
+    numeric_value = pd.to_numeric(value, errors="coerce")
+    if pd.notna(numeric_value):
+        if numeric_value == 1:
+            return "Yes"
+        if numeric_value == 0:
+            return "No"
     key = norm_text(value)
     if key in {"yes", "y", "1", "true"}:
         return "Yes"
@@ -348,10 +373,25 @@ def combine_cfs(row):
     return choose_first_nonmissing(row, ["child_friendly_space_visited", "cfs_visited"])
 
 
+def is_take5_text(*values):
+    for value in values:
+        key = norm_text(value)
+        if not key:
+            continue
+        if re.search(r"(^|\s)take\s+5($|\s|[a-z])", key):
+            return True
+        if re.search(r"(^|\s)take5($|\s|[a-z])", key):
+            return True
+    return False
+
+
 def clean_game(row):
     raw = row.get("games_played", None)
     other = row.get("game_other_specify", None)
     raw_key = norm_text(raw)
+    other_key = norm_text(other)
+    if is_take5_text(raw, other):
+        return "Take 5"
     if raw_key in {"", "other", "others", "specify other"} and norm_text(other):
         return fuzzy_harmonize(other, GAME_MAP, cutoff=0.84)
     if norm_text(raw):
@@ -366,6 +406,8 @@ def clean_staff(value):
 
 
 def clean_issue_other(value):
+    if is_take5_text(value):
+        return "Take 5"
     return fuzzy_harmonize(value, ISSUE_OTHER_MAP, cutoff=0.84)
 
 
@@ -389,7 +431,7 @@ def load_and_prepare(path_text, modified_time):
                 and payload.get("source_path") == str(path)
                 and payload.get("modified_time") == modified_time
             ):
-                return payload["df"], payload["issue_long"], payload["support_long"]
+                return payload["df"], payload["issue_long"], payload["support_long"], payload["game_long"]
     except Exception:
         pass
 
@@ -442,6 +484,7 @@ def load_and_prepare(path_text, modified_time):
         tmp = tmp.rename(columns={"issue_other_specify_clean": "issue_clean"})
         issue_frames.append(tmp)
     issue_long = pd.concat(issue_frames, ignore_index=True) if issue_frames else pd.DataFrame(columns=["record_id", "issue_clean"])
+    issue_long = issue_long.drop_duplicates(["record_id", "issue_clean"]).reset_index(drop=True)
 
     support_frames = []
     for col, label in SUPPORT_COLUMNS.items():
@@ -451,6 +494,14 @@ def load_and_prepare(path_text, modified_time):
             tmp["support_clean"] = label
             support_frames.append(tmp)
     support_long = pd.concat(support_frames, ignore_index=True) if support_frames else pd.DataFrame(columns=["record_id", "support_clean"])
+    support_long = support_long.drop_duplicates(["record_id", "support_clean"]).reset_index(drop=True)
+
+    game_long = (
+        df.loc[~df["games_played_clean"].isin([MISSING, REVIEW]), ["record_id", "games_played_clean"]]
+        .rename(columns={"games_played_clean": "game_clean"})
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
 
     issues_combined = issue_long.groupby("record_id")["issue_clean"].apply(lambda x: "; ".join(sorted(set(x)))).rename("issues_combined")
     support_combined = support_long.groupby("record_id")["support_clean"].apply(lambda x: "; ".join(sorted(set(x)))).rename("support_combined")
@@ -467,13 +518,14 @@ def load_and_prepare(path_text, modified_time):
                 "df": df,
                 "issue_long": issue_long,
                 "support_long": support_long,
+                "game_long": game_long,
             },
             PREPARED_CACHE_PATH,
         )
     except Exception:
         pass
 
-    return df, issue_long, support_long
+    return df, issue_long, support_long, game_long
 
 
 def table_with_total(data, index, columns=None, value_col="record_id"):
@@ -692,6 +744,168 @@ def style_simple_total(df):
     )
 
 
+def file_slug(value):
+    value = re.sub(r"[^a-zA-Z0-9]+", "_", str(value)).strip("_").lower()
+    return value[:90] or "dashboard_export"
+
+
+def flatten_table_for_export(table):
+    flat = table.copy()
+    if isinstance(flat.index, pd.MultiIndex):
+        flat.index = [" | ".join(str(part) for part in idx if str(part) != "") for idx in flat.index]
+    if isinstance(flat.columns, pd.MultiIndex):
+        flat.columns = [" | ".join(str(part) for part in col if str(part) != "") for col in flat.columns]
+    flat = flat.reset_index()
+    flat.columns = [str(col) if str(col) != "index" else "Category" for col in flat.columns]
+    return flat
+
+
+def dataframe_to_png_bytes(table, title):
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return None, "Image export for tables requires matplotlib."
+    if table.empty:
+        return None, "No table data available to export."
+
+    flat = flatten_table_for_export(table)
+    row_count = len(flat)
+    col_count = len(flat.columns)
+    width = min(24, max(9, col_count * 1.45))
+    height = min(40, max(3.2, row_count * 0.34 + 1.7))
+
+    fig, ax = plt.subplots(figsize=(width, height))
+    ax.axis("off")
+    ax.set_title(title, fontsize=14, fontweight="bold", loc="left", pad=12)
+    table_artist = ax.table(
+        cellText=flat.astype(str).values,
+        colLabels=flat.columns,
+        loc="upper left",
+        cellLoc="left",
+        colLoc="left",
+    )
+    table_artist.auto_set_font_size(False)
+    table_artist.set_fontsize(8)
+    table_artist.scale(1, 1.25)
+    for (row, col), cell in table_artist.get_celld().items():
+        cell.set_edgecolor("#d5dee9")
+        if row == 0:
+            cell.set_facecolor("#eaf2fb")
+            cell.set_text_props(weight="bold", color="#111827")
+        elif any(str(value) == "Grand Total" for value in flat.iloc[row - 1].values):
+            cell.set_facecolor("#dbeafe")
+            cell.set_text_props(weight="bold", color="#0f172a")
+        elif row % 2 == 0:
+            cell.set_facecolor("#f8fafc")
+        else:
+            cell.set_facecolor("#ffffff")
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    return buffer.getvalue(), None
+
+
+def table_image_download(table, key, title):
+    if table.empty:
+        return
+    image_key = f"table_png_{key}"
+    message_key = f"table_png_message_{key}"
+    prep_col, download_col = st.columns([1, 1.2])
+    with prep_col:
+        if st.button("Prepare table image", key=f"prepare_table_{key}", use_container_width=True):
+            image, message = dataframe_to_png_bytes(table, title)
+            st.session_state[image_key] = image
+            st.session_state[message_key] = message
+    with download_col:
+        if st.session_state.get(image_key):
+            st.download_button(
+                "Download table image",
+                data=st.session_state[image_key],
+                file_name=f"{file_slug(title)}.png",
+                mime="image/png",
+                key=f"download_table_{key}",
+                use_container_width=True,
+            )
+    if st.session_state.get(message_key):
+        st.caption(st.session_state[message_key])
+
+
+def render_table(table, key, title, simple=False):
+    st.dataframe(style_simple_total(table) if simple else style_total(table), use_container_width=True)
+    table_image_download(table, key, title)
+
+
+def chart_image_download(fig, key, title):
+    image_key = f"chart_png_{key}"
+    message_key = f"chart_png_message_{key}"
+    prep_col, download_col = st.columns([1, 1.2])
+    with prep_col:
+        if st.button("Prepare chart image", key=f"prepare_chart_{key}", use_container_width=True):
+            try:
+                st.session_state[image_key] = fig.to_image(format="png", scale=2)
+                st.session_state[message_key] = None
+            except Exception:
+                st.session_state[image_key] = None
+                st.session_state[message_key] = "Chart image export requires the kaleido package in the Streamlit environment."
+    with download_col:
+        if st.session_state.get(image_key):
+            st.download_button(
+                "Download chart image",
+                data=st.session_state[image_key],
+                file_name=f"{file_slug(title)}.png",
+                mime="image/png",
+                key=f"download_chart_{key}",
+                use_container_width=True,
+            )
+    if st.session_state.get(message_key):
+        st.caption(st.session_state[message_key])
+
+
+def multi_response_tables(long_data, value_col, label):
+    if long_data.empty or value_col not in long_data.columns:
+        empty_distribution = pd.DataFrame(columns=["Selection count", "Count"])
+        empty_combinations = pd.DataFrame(columns=[f"{label} combination", "Count"])
+        return empty_distribution, empty_combinations
+
+    cleaned = (
+        long_data[["record_id", value_col]]
+        .dropna()
+        .drop_duplicates()
+        .copy()
+    )
+    cleaned = cleaned[~cleaned[value_col].astype("string").isin([MISSING, REVIEW])]
+    if cleaned.empty:
+        empty_distribution = pd.DataFrame(columns=["Selection count", "Count"])
+        empty_combinations = pd.DataFrame(columns=[f"{label} combination", "Count"])
+        return empty_distribution, empty_combinations
+
+    per_record = cleaned.groupby("record_id", observed=False)[value_col].agg(
+        lambda values: sorted(set(str(value) for value in values if str(value).strip()))
+    )
+    selection_counts = per_record.map(len)
+    distribution = (
+        selection_counts.value_counts()
+        .sort_index()
+        .rename_axis("Selection count")
+        .reset_index(name="Count")
+    )
+    distribution["Selection count"] = distribution["Selection count"].map(
+        lambda count: "1 selection" if count == 1 else f"{count} selections"
+    )
+    distribution = add_grand_total_row(distribution, "Selection count")
+
+    combinations = (
+        per_record.map(lambda values: " + ".join(values))
+        .value_counts()
+        .rename_axis(f"{label} combination")
+        .reset_index(name="Count")
+        .sort_values("Count", ascending=False)
+    )
+    combinations = top_n_with_total(combinations, 30, f"{label} combination")
+    return distribution, combinations
+
+
 def bar_chart(data, x, y, color=None, title="", horizontal=False, height=420, category_orders=None):
     if data.empty:
         st.info("No records available for this chart.")
@@ -738,7 +952,17 @@ def bar_chart(data, x, y, color=None, title="", horizontal=False, height=420, ca
     fig.update_yaxes(showgrid=False, zeroline=False)
     if horizontal and y_order:
         fig.update_yaxes(categoryorder="array", categoryarray=y_order)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+    chart_key = file_slug(title)
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": True,
+            "responsive": True,
+            "toImageButtonOptions": {"format": "png", "filename": chart_key, "scale": 2},
+        },
+    )
+    chart_image_download(fig, chart_key, title)
 
 
 def pie_chart(data, names, values, title=""):
@@ -763,7 +987,18 @@ def pie_chart(data, names, values, title=""):
         font=dict(size=13, color="#111827"),
         legend_title_text="",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+    chart_key = file_slug(title)
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": True,
+            "responsive": True,
+            "toImageButtonOptions": {"format": "png", "filename": chart_key, "scale": 2},
+        },
+    )
+    chart_image_download(fig, chart_key, title)
+
 
 
 def section_note(text):
@@ -1131,14 +1366,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    """
-    <div class="dashboard-title">
-        <h1>Tdh Kenya Child Friendly Spaces Dashboard</h1>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+title_col, logo_col = st.columns([5, 1])
+with title_col:
+    st.markdown(
+        """
+        <div class="dashboard-title">
+            <h1>Tdh Kenya Child Friendly Spaces Dashboard</h1>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+with logo_col:
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), use_container_width=True)
 record_status_slot = st.empty()
 
 if not DATA_PATH.exists():
@@ -1158,7 +1398,7 @@ if st.sidebar.button("Refresh data and clear cache", use_container_width=True):
     st.rerun()
 
 modified_time = DATA_PATH.stat().st_mtime
-df, issue_long, support_long = load_and_prepare(str(DATA_PATH), modified_time)
+df, issue_long, support_long, game_long = load_and_prepare(str(DATA_PATH), modified_time)
 
 st.sidebar.header("Filters")
 st.sidebar.caption("Use each level in order. Later filters unlock after the location path is defined.")
@@ -1258,9 +1498,10 @@ filtered["gender_clean"] = pd.Categorical(filtered["gender_clean"], categories=G
 filtered["first_visit_clean"] = pd.Categorical(filtered["first_visit_clean"], categories=YES_NO_ORDER, ordered=True)
 filtered["disability_status_clean"] = pd.Categorical(filtered["disability_status_clean"], categories=YES_NO_ORDER, ordered=True)
 
-context_columns = ["record_id", "settlement_clean", "location_clean", "cfs_clean", "gender_clean", "age_group"]
+context_columns = ["record_id", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_group"]
 issue_context = issue_long.merge(filtered[context_columns], on="record_id", how="inner")
 support_context = support_long.merge(filtered[context_columns], on="record_id", how="inner")
+game_context = game_long.merge(filtered[context_columns], on="record_id", how="inner")
 
 source_modified = time.strftime("%d %b %Y %H:%M", time.localtime(modified_time))
 st.caption(f"Last modified: {source_modified}")
@@ -1393,21 +1634,22 @@ st.markdown("<div class='section-subtitle'>Select the analytical view you want t
 section = st.radio(
     "Dashboard section",
     [
-        "CPVs Data Distribution",
+        "CPVs Data KPIs",
         "CFS Beneficiary Demographics",
-        "Protection & Support",
-        "Games, Activities & Referrals",
+        "Games & Activities Engaged",
+        "Protection Issues & Support Offered",
+        "Referrals",
         "Data Quality & Harmonization",
     ],
     horizontal=True,
     label_visibility="collapsed",
 )
 
-if section == "CPVs Data Distribution":
+if section == "CPVs Data KPIs":
     st.subheader("CPV / Staff Data Submission")
     staff_table = table_with_total(filtered, ["staff_clean"], ["gender_clean"])
     staff_table = add_interview_date_columns(staff_table, filtered, "staff_clean", "date")
-    st.dataframe(style_total(staff_table), use_container_width=True)
+    render_table(staff_table, "staff_submission", "CPV / Staff Data Submission")
     staff_chart = count_table(filtered, ["staff_clean", "gender_clean"])
     staff_chart = top_n_chart_control(staff_chart, "staff_clean", "staff", default=15)
     bar_chart(staff_chart, "Count", "staff_clean", "gender_clean", "Top staff filling forms by gender", horizontal=True, height=680)
@@ -1416,7 +1658,7 @@ if section == "CPVs Data Distribution":
     st.divider()
     st.subheader("Settlement, Location & CFS Distribution")
     site_table = table_with_total(filtered, ["settlement_clean", "location_clean", "cfs_clean"], ["gender_clean"])
-    st.dataframe(style_total(site_table), use_container_width=True)
+    render_table(site_table, "site_distribution", "Settlement, Location & CFS Distribution")
     site_chart = count_table(filtered, ["cfs_clean", "gender_clean"])
     site_chart = top_n_chart_control(site_chart, "cfs_clean", "site_distribution", default=15)
     bar_chart(site_chart, "Count", "cfs_clean", "gender_clean", "CFS / site records by gender", horizontal=True, height=600)
@@ -1430,7 +1672,7 @@ if section == "CFS Beneficiary Demographics":
 
     st.markdown("#### First visit to CFS by Gender")
     first_visit_gender_table = table_with_total(first_visit_records, ["first_visit_clean"], ["gender_clean"])
-    st.dataframe(style_total(first_visit_gender_table), use_container_width=True)
+    render_table(first_visit_gender_table, "first_visit_gender", "First Visit to CFS by Gender")
     first_visit_gender_chart = count_table(first_visit_records, ["first_visit_clean", "gender_clean"])
     bar_chart(
         first_visit_gender_chart,
@@ -1445,7 +1687,7 @@ if section == "CFS Beneficiary Demographics":
 
     st.markdown("#### First visit to CFS by Site")
     first_visit_table = table_with_total(first_visit_records, ["cfs_clean"], ["first_visit_clean", "gender_clean"])
-    st.dataframe(style_total(first_visit_table), use_container_width=True)
+    render_table(first_visit_table, "first_visit_site", "First Visit to CFS by Site")
     first_visit_chart = count_table(first_visit_records, ["cfs_clean", "first_visit_clean"])
     first_visit_chart = top_n_chart_control(first_visit_chart, "cfs_clean", "first_visit_site", default=15)
     bar_chart(
@@ -1463,7 +1705,7 @@ if section == "CFS Beneficiary Demographics":
     st.divider()
     st.subheader("Gender by CFS")
     gender_cfs_table = table_with_total(filtered, ["cfs_clean"], ["gender_clean"])
-    st.dataframe(style_total(gender_cfs_table), use_container_width=True)
+    render_table(gender_cfs_table, "gender_by_cfs", "Gender by CFS")
     gender_cfs_chart = count_table(filtered, ["cfs_clean", "gender_clean"])
     gender_cfs_chart = top_n_chart_control(gender_cfs_chart, "cfs_clean", "gender_cfs", default=15)
     bar_chart(gender_cfs_chart, "Count", "cfs_clean", "gender_clean", "Gender by CFS / site", horizontal=True, height=640)
@@ -1471,23 +1713,23 @@ if section == "CFS Beneficiary Demographics":
     st.divider()
     st.subheader("Age Group Breakdown by CFS & Gender")
     age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
-    st.dataframe(style_total(age_table), use_container_width=True)
+    render_table(age_table, "age_group_overall", "Age Group Breakdown")
     age_cfs_table = table_with_total(filtered, ["cfs_clean"], ["age_group", "gender_clean"])
-    st.dataframe(style_total(age_cfs_table), use_container_width=True)
+    render_table(age_cfs_table, "age_group_cfs_gender", "Age Group Breakdown by CFS & Gender")
     age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
     bar_chart(age_chart, "age_group", "Count", "gender_clean", "Overall age group distribution by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
 
-if section == "Protection & Support":
+if section == "Protection Issues & Support Offered":
     st.subheader("Disability Prevalence & Disability Types")
     disability_table = table_with_total(filtered, ["disability_status_clean"], ["gender_clean"])
-    st.dataframe(style_total(disability_table), use_container_width=True)
+    render_table(disability_table, "disability_prevalence", "Disability Prevalence")
     disability_chart = count_table(filtered, ["disability_status_clean", "gender_clean"])
     bar_chart(disability_chart, "Count", "disability_status_clean", "gender_clean", "Disability prevalence by gender", horizontal=True, height=360)
 
     st.markdown("#### Disability types")
     disability_yes = filtered[filtered["disability_status_clean"].astype("string").eq("Yes")].copy()
     disability_type_table = table_with_total(disability_yes[~disability_yes["disability_type_display"].isin([MISSING])], ["disability_type_display"], ["gender_clean"])
-    st.dataframe(style_total(disability_type_table), use_container_width=True)
+    render_table(disability_type_table, "disability_types", "Disability Types")
     disability_chart_source = disability_yes[~disability_yes["disability_type_display"].isin([MISSING])].copy()
     disability_chart_source["disability_type_display"] = disability_chart_source["disability_type_display"].map(shorten_disability_type)
     disability_types = count_table(disability_chart_source, ["disability_type_display", "gender_clean"])
@@ -1498,33 +1740,57 @@ if section == "Protection & Support":
     st.divider()
     st.subheader("Nature of Issues Reported")
     issue_table = table_with_total(issue_context, ["issue_clean"], ["gender_clean"])
-    st.dataframe(style_total(issue_table), use_container_width=True)
+    render_table(issue_table, "nature_issues", "Nature of Issues Reported")
     issue_chart = count_table(issue_context, ["issue_clean", "gender_clean"])
     issue_chart = top_n_chart_control(issue_chart, "issue_clean", "issues", default=15)
     bar_chart(issue_chart, "Count", "issue_clean", "gender_clean", "Issues reported by gender", horizontal=True, height=720)
+    issue_distribution, issue_combinations = multi_response_tables(issue_context, "issue_clean", "Issue")
+    st.markdown("#### Multiple issues per child / record")
+    issue_dist_col, issue_combo_col = st.columns([1, 1.8])
+    with issue_dist_col:
+        render_table(issue_distribution, "issue_selection_distribution", "Issue Selection Count per Child / Record", simple=True)
+    with issue_combo_col:
+        render_table(issue_combinations, "issue_combinations", "Most Common Issue Combinations", simple=True)
+    st.markdown("#### Issues Captured by CPV / Staff")
+    issue_staff_table = table_with_total(issue_context, ["staff_clean"], ["issue_clean"])
+    render_table(issue_staff_table, "issues_by_cpv_staff", "Issues Captured by CPV / Staff")
     section_note("The Other/specify issue entries are harmonized into readable categories such as Take 5, Play / child engagement, Medical concern and GBV.")
 
     st.divider()
     st.subheader("Support Offered")
     support_table = table_with_total(support_context, ["support_clean"], ["gender_clean"])
-    st.dataframe(style_total(support_table), use_container_width=True)
+    render_table(support_table, "support_offered", "Support Offered")
     support_chart = count_table(support_context, ["support_clean", "gender_clean"])
     bar_chart(support_chart, "Count", "support_clean", "gender_clean", "Support offered by gender", horizontal=True, height=420)
+    support_distribution, support_combinations = multi_response_tables(support_context, "support_clean", "Support")
+    st.markdown("#### Multiple support types per child / record")
+    support_dist_col, support_combo_col = st.columns([1, 1.8])
+    with support_dist_col:
+        render_table(support_distribution, "support_selection_distribution", "Support Selection Count per Child / Record", simple=True)
+    with support_combo_col:
+        render_table(support_combinations, "support_combinations", "Most Common Support Combinations", simple=True)
 
-if section == "Games, Activities & Referrals":
+if section == "Games & Activities Engaged":
     st.subheader("Games / Activities Engagement")
-    games_table = table_with_total(filtered, ["games_played_clean"], ["gender_clean"])
-    st.dataframe(style_total(games_table), use_container_width=True)
-    games_chart = count_table(filtered, ["games_played_clean", "gender_clean"])
-    games_chart = top_n_chart_control(games_chart, "games_played_clean", "games", default=15)
-    bar_chart(games_chart, "Count", "games_played_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680)
+    games_table = table_with_total(game_context, ["game_clean"], ["gender_clean"])
+    render_table(games_table, "games_activities", "Games / Activities Engagement")
+    games_chart = count_table(game_context, ["game_clean", "gender_clean"])
+    games_chart = top_n_chart_control(games_chart, "game_clean", "games", default=15)
+    bar_chart(games_chart, "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680)
+    game_distribution, game_combinations = multi_response_tables(game_context, "game_clean", "Game / activity")
+    st.markdown("#### Multiple games / activities per child / record")
+    game_dist_col, game_combo_col = st.columns([1, 1.8])
+    with game_dist_col:
+        render_table(game_distribution, "game_selection_distribution", "Game / Activity Selection Count per Child / Record", simple=True)
+    with game_combo_col:
+        render_table(game_combinations, "game_combinations", "Most Common Game / Activity Combinations", simple=True)
 
-    st.divider()
+if section == "Referrals":
     st.subheader("Referral Destination If Yes")
     referrals = filtered[filtered["referral_made_clean"].astype("string").eq("Yes")].copy()
     referral_dest = referrals[referrals["referral_destination_grouped"].isin(["PSS", "Case Management", "Empowerment", "External referrals"])]
     referral_table = table_with_total(referral_dest, ["referral_destination_grouped"], ["gender_clean"])
-    st.dataframe(style_total(referral_table), use_container_width=True)
+    render_table(referral_table, "referral_destination", "Referral Destination If Yes")
     referral_chart = count_table(referral_dest, ["referral_destination_grouped", "gender_clean"])
     bar_chart(
         referral_chart,
@@ -1544,7 +1810,7 @@ if section == "Games, Activities & Referrals":
         & ~referrals["external_referral_agency_clean"].isin([MISSING, "Unknown", REVIEW])
     ].copy()
     external_table = table_with_total(external, ["external_referral_agency_clean"], ["gender_clean"])
-    st.dataframe(style_total(external_table), use_container_width=True)
+    render_table(external_table, "external_referral_agencies", "External Referral Agency Breakdown")
     external_chart = count_table(external, ["external_referral_agency_clean", "gender_clean"])
     external_chart = top_n_chart_control(external_chart, "external_referral_agency_clean", "external_agency", default=15)
     bar_chart(external_chart, "Count", "external_referral_agency_clean", "gender_clean", "External referral agencies by gender", horizontal=True, height=600)
@@ -1569,7 +1835,7 @@ if section == "Data Quality & Harmonization":
         .sort_values("Count", ascending=False)
     )
     staff_review = top_n_with_total(staff_review, 80, "staff_filling_form")
-    st.dataframe(style_simple_total(staff_review), use_container_width=True)
+    render_table(staff_review, "staff_harmonization_review", "Harmonized Staff Name Review", simple=True)
 
     st.markdown("#### Other issue specification review")
     issue_review = (
@@ -1580,7 +1846,7 @@ if section == "Data Quality & Harmonization":
         .sort_values("Count", ascending=False)
     )
     issue_review = top_n_with_total(issue_review, 80, "issue_other_specify")
-    st.dataframe(style_simple_total(issue_review), use_container_width=True)
+    render_table(issue_review, "issue_other_review", "Other Issue Specification Review", simple=True)
 
     st.markdown("#### Disability display label review")
     disability_review = (
@@ -1591,4 +1857,4 @@ if section == "Data Quality & Harmonization":
         .sort_values("Count", ascending=False)
     )
     disability_review = add_grand_total_row(disability_review, "disability_type")
-    st.dataframe(style_simple_total(disability_review), use_container_width=True)
+    render_table(disability_review, "disability_label_review", "Disability Display Label Review", simple=True)
