@@ -1,27 +1,31 @@
 from pathlib import Path
 from difflib import SequenceMatcher
 from io import BytesIO
+import hashlib
 import re
 import time
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import matplotlib.pyplot as plt
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = Path(r"./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+DATA_FILE_NAME = "CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx"
+DATA_DIR = BASE_DIR / "data"
+LOCAL_DATA_FALLBACK = Path(r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data") / DATA_FILE_NAME
+DATA_PATH = DATA_DIR / DATA_FILE_NAME
+if not DATA_PATH.exists() and LOCAL_DATA_FALLBACK.exists():
+    DATA_PATH = LOCAL_DATA_FALLBACK
 LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
-SHEET_NAME = "Transformed Data"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
-CACHE_VERSION = "cfs-dashboard-prepared-v9"
+CACHE_VERSION = "cfs-dashboard-prepared-v13"
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
 AGE_GROUP_ORDER = ["0-5 years", "6-12 years", "13-17 years", MISSING]
 YES_NO_ORDER = ["Yes", "No", MISSING]
-GENDER_ORDER = ["Boy", "Girl", MISSING]
+GENDER_ORDER = ["Boy", "Girl", "Other", MISSING]
 TOP_N_OPTIONS = [5, 10, 15, 25]
 
 ISSUE_COLUMNS = {
@@ -280,6 +284,19 @@ def yes_no(value):
     return MISSING
 
 
+def clean_gender(value):
+    key = norm_text(value)
+    if not key:
+        return MISSING
+    if key in {"boy", "male", "m"}:
+        return "Boy"
+    if key in {"girl", "female", "f"}:
+        return "Girl"
+    if key in {"other", "others", "non binary", "nonbinary", "other gender"}:
+        return "Other"
+    return "Other"
+
+
 def is_yes(value):
     return yes_no(value) == "Yes"
 
@@ -422,21 +439,20 @@ def ordered_unique(series, order=None):
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_and_prepare(path_text, modified_time):
-    path = Path(path_text)
+def load_and_prepare(modified_time):
     try:
         if PREPARED_CACHE_PATH.exists():
             payload = pd.read_pickle(PREPARED_CACHE_PATH)
             if (
                 payload.get("cache_version") == CACHE_VERSION
-                and payload.get("source_path") == str(path)
+                and payload.get("source_path") == str(DATA_PATH)
                 and payload.get("modified_time") == modified_time
             ):
                 return payload["df"], payload["issue_long"], payload["support_long"], payload["game_long"]
     except Exception:
         pass
 
-    df = pd.read_excel(path, sheet_name=SHEET_NAME)
+    df = pd.read_excel(DATA_PATH)
     df = df.copy()
     df.insert(0, "record_id", range(1, len(df) + 1))
 
@@ -444,8 +460,7 @@ def load_and_prepare(path_text, modified_time):
     df["month"] = df["date"].dt.to_period("M").astype("string")
     df["consent_clean"] = df["consent"].map(yes_no)
     df["staff_clean"] = df["staff_filling_form"].map(clean_staff)
-    df["gender_clean"] = df["child_gender"].map(lambda v: harmonize_from_map(v, {}, fallback_title=True))
-    df["gender_clean"] = df["gender_clean"].replace({"Male": "Boy", "Female": "Girl"})
+    df["gender_clean"] = df["child_gender"].map(clean_gender)
     df["disability_status_clean"] = df["child_living_with_disability"].map(yes_no)
     df["first_visit_clean"] = df["first_visit_tdh_cfs"].map(yes_no)
     df["referral_made_clean"] = df["referral_made"].map(yes_no)
@@ -514,7 +529,7 @@ def load_and_prepare(path_text, modified_time):
         pd.to_pickle(
             {
                 "cache_version": CACHE_VERSION,
-                "source_path": str(path),
+                "source_path": str(DATA_PATH),
                 "modified_time": modified_time,
                 "df": df,
                 "issue_long": issue_long,
@@ -681,14 +696,17 @@ def top_n_chart_control(data, category_col, key, label="Chart category slicer", 
     category_count = data[category_col].nunique(dropna=True)
     if category_count <= min(TOP_N_OPTIONS):
         return data
-    default_index = TOP_N_OPTIONS.index(default) if default in TOP_N_OPTIONS else 1
+    control_signature = dataframe_signature(data)
+    control_key = f"{key}_{control_signature}"
+    default_index = 0
     mode_col, count_col = st.columns([1, 1.4])
     with mode_col:
         mode = st.radio(
             label,
             ["Highest", "Lowest"],
+            index=0,
             horizontal=True,
-            key=f"chart_rank_mode_{key}",
+            key=f"chart_rank_mode_{control_key}",
             help="This limits the chart only. The table above remains complete.",
         )
     with count_col:
@@ -697,7 +715,7 @@ def top_n_chart_control(data, category_col, key, label="Chart category slicer", 
             TOP_N_OPTIONS,
             index=default_index,
             horizontal=True,
-            key=f"chart_top_n_{key}",
+            key=f"chart_top_n_{control_key}",
         )
     totals = data.groupby(category_col, observed=False)["Count"].sum().sort_values(ascending=(mode == "Lowest"))
     keep = totals.head(selected_n).index
@@ -761,6 +779,19 @@ def flatten_table_for_export(table):
     return flat
 
 
+def dataframe_signature(table):
+    if table.empty:
+        return "empty"
+    flat = flatten_table_for_export(table).astype("string").fillna("")
+    metadata = f"{flat.shape}|{'|'.join(flat.columns)}".encode("utf-8", errors="ignore")
+    hashed_values = pd.util.hash_pandas_object(flat, index=True).values.tobytes()
+    return hashlib.md5(metadata + hashed_values).hexdigest()[:12]
+
+
+def chart_signature(fig):
+    return hashlib.md5(fig.to_json().encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
 def dataframe_to_png_bytes(table, title):
     try:
         import matplotlib.pyplot as plt
@@ -810,11 +841,13 @@ def dataframe_to_png_bytes(table, title):
 def table_image_download(table, key, title):
     if table.empty:
         return
-    image_key = f"table_png_{key}"
-    message_key = f"table_png_message_{key}"
+    current_signature = dataframe_signature(table)
+    scoped_key = f"{key}_{current_signature}"
+    image_key = f"table_png_{scoped_key}"
+    message_key = f"table_png_message_{scoped_key}"
     prep_col, download_col = st.columns([1, 1.2])
     with prep_col:
-        if st.button("Prepare table image", key=f"prepare_table_{key}", use_container_width=True):
+        if st.button("Prepare current table image", key=f"prepare_table_{scoped_key}", use_container_width=True):
             image, message = dataframe_to_png_bytes(table, title)
             st.session_state[image_key] = image
             st.session_state[message_key] = message
@@ -825,7 +858,7 @@ def table_image_download(table, key, title):
                 data=st.session_state[image_key],
                 file_name=f"{file_slug(title)}.png",
                 mime="image/png",
-                key=f"download_table_{key}",
+                key=f"download_table_{scoped_key}",
                 use_container_width=True,
             )
     if st.session_state.get(message_key):
@@ -838,11 +871,13 @@ def render_table(table, key, title, simple=False):
 
 
 def chart_image_download(fig, key, title):
-    image_key = f"chart_png_{key}"
-    message_key = f"chart_png_message_{key}"
+    current_signature = chart_signature(fig)
+    scoped_key = f"{key}_{current_signature}"
+    image_key = f"chart_png_{scoped_key}"
+    message_key = f"chart_png_message_{scoped_key}"
     prep_col, download_col = st.columns([1, 1.2])
     with prep_col:
-        if st.button("Prepare chart image", key=f"prepare_chart_{key}", use_container_width=True):
+        if st.button("Prepare current chart image", key=f"prepare_chart_{scoped_key}", use_container_width=True):
             try:
                 st.session_state[image_key] = fig.to_image(format="png", scale=2)
                 st.session_state[message_key] = None
@@ -856,7 +891,7 @@ def chart_image_download(fig, key, title):
                 data=st.session_state[image_key],
                 file_name=f"{file_slug(title)}.png",
                 mime="image/png",
-                key=f"download_chart_{key}",
+                key=f"download_chart_{scoped_key}",
                 use_container_width=True,
             )
     if st.session_state.get(message_key):
@@ -1399,7 +1434,7 @@ if st.sidebar.button("Refresh data and clear cache", use_container_width=True):
     st.rerun()
 
 modified_time = DATA_PATH.stat().st_mtime
-df, issue_long, support_long, game_long = load_and_prepare(str(DATA_PATH), modified_time)
+df, issue_long, support_long, game_long = load_and_prepare(modified_time)
 
 st.sidebar.header("Filters")
 st.sidebar.caption("Use each level in order. Later filters unlock after the location path is defined.")
@@ -1632,19 +1667,66 @@ with quick_panel:
 
 st.markdown("<div class='section-heading dashboard-section-heading'>Dashboard Section</div>", unsafe_allow_html=True)
 st.markdown("<div class='section-subtitle'>Select the analytical view you want to explore.</div>", unsafe_allow_html=True)
+section_options = [
+    "Overview",
+    "CPVs Data KPIs",
+    "CFS Beneficiary Demographics",
+    "Games & Activities Engaged",
+    "Protection Issues & Support Offered",
+    "Referrals",
+    "Data Quality & Harmonization",
+]
+if st.session_state.get("dashboard_section") not in section_options:
+    st.session_state["dashboard_section"] = "Overview"
 section = st.radio(
     "Dashboard section",
-    [
-        "CPVs Data KPIs",
-        "CFS Beneficiary Demographics",
-        "Games & Activities Engaged",
-        "Protection Issues & Support Offered",
-        "Referrals",
-        "Data Quality & Harmonization",
-    ],
+    section_options,
+    index=0,
+    key="dashboard_section",
     horizontal=True,
     label_visibility="collapsed",
 )
+
+if section == "Overview":
+    st.subheader("Overview")
+    st.caption("This overview refreshes from the current filter path and gives a quick operating picture before moving into the detailed dashboard sections.")
+    st.markdown("#### Camp Records by Gender - Table")
+    overview_camp_table = table_with_total(filtered, ["settlement_clean"], ["gender_clean"])
+    render_table(overview_camp_table, "overview_camp_records", "Overview Camp Records by Gender")
+
+    st.markdown("#### Camp Records by Gender - Chart")
+    overview_camp_chart = count_table(filtered, ["settlement_clean", "gender_clean"])
+    overview_camp_chart = top_n_chart_control(overview_camp_chart, "settlement_clean", "overview_camps")
+    bar_chart(overview_camp_chart, "Count", "settlement_clean", "gender_clean", "Overview camp records by gender", horizontal=True, height=420)
+
+    st.divider()
+    st.markdown("#### Age Group by Gender - Table")
+    overview_age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
+    render_table(overview_age_table, "overview_age_group", "Overview Age Group by Gender")
+
+    st.markdown("#### Age Group by Gender - Chart")
+    overview_age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
+    bar_chart(overview_age_chart, "age_group", "Count", "gender_clean", "Overview age group by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
+
+    st.divider()
+    st.markdown("#### Top Reported Issues - Table")
+    overview_issue_table = table_with_total(issue_context, ["issue_clean"], ["gender_clean"])
+    render_table(overview_issue_table, "overview_issue_records", "Overview Top Reported Issues")
+
+    st.markdown("#### Top Reported Issues - Chart")
+    overview_issue_chart = count_table(issue_context, ["issue_clean", "gender_clean"])
+    overview_issue_chart = top_n_chart_control(overview_issue_chart, "issue_clean", "overview_issues")
+    bar_chart(overview_issue_chart, "Count", "issue_clean", "gender_clean", "Overview top reported issues", horizontal=True, height=520)
+
+    st.divider()
+    st.markdown("#### Top Games / Activities - Table")
+    overview_game_table = table_with_total(game_context, ["game_clean"], ["gender_clean"])
+    render_table(overview_game_table, "overview_game_records", "Overview Top Games and Activities")
+
+    st.markdown("#### Top Games / Activities - Chart")
+    overview_game_chart = count_table(game_context, ["game_clean", "gender_clean"])
+    overview_game_chart = top_n_chart_control(overview_game_chart, "game_clean", "overview_games")
+    bar_chart(overview_game_chart, "Count", "game_clean", "gender_clean", "Overview top games and activities", horizontal=True, height=520)
 
 if section == "CPVs Data KPIs":
     st.subheader("CPV / Staff Data Submission")
