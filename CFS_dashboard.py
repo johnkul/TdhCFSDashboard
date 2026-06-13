@@ -7,6 +7,7 @@ import time
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import matplotlib.pyplot as plt
 
 
 BASE_DIR = Path(__file__).resolve().parent
