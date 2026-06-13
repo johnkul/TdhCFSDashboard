@@ -10,7 +10,7 @@ import streamlit as st
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = Path(r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data\CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
+DATA_PATH = Path(r"./data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx")
 LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
 SHEET_NAME = "Transformed Data"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
