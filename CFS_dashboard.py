@@ -11,16 +11,25 @@ import streamlit as st
 
 
 BASE_DIR = Path(__file__).resolve().parent
+
 DATA_FILE_NAME = "CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx"
 DATA_DIR = BASE_DIR / "data"
-LOCAL_DATA_FALLBACK = Path(r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data") / DATA_FILE_NAME
 DATA_PATH = DATA_DIR / DATA_FILE_NAME
+
+LOCAL_DATA_FALLBACK = Path(
+    r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data"
+) / DATA_FILE_NAME
+
 if not DATA_PATH.exists() and LOCAL_DATA_FALLBACK.exists():
     DATA_PATH = LOCAL_DATA_FALLBACK
+
 LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
 CSS_PATH = BASE_DIR / "assets" / "styles.css"
+
+PREPARED_DATA_PATH = DATA_DIR / "cfs_dashboard_prepared.pkl"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
-CACHE_VERSION = "cfs-dashboard-prepared-v15"
+
+CACHE_VERSION = "cfs-dashboard-prepared-v16"
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
@@ -456,17 +465,18 @@ def ordered_unique(series, order=None):
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_and_prepare(modified_time):
-    try:
-        if PREPARED_CACHE_PATH.exists():
-            payload = pd.read_pickle(PREPARED_CACHE_PATH)
-            if (
-                payload.get("cache_version") == CACHE_VERSION
-                and payload.get("source_path") == str(DATA_PATH)
-                and payload.get("modified_time") == modified_time
-            ):
-                return payload["df"], payload["issue_long"], payload["support_long"], payload["game_long"]
-    except Exception:
-        pass
+    if PREPARED_DATA_PATH.exists():
+        try:
+            payload = pd.read_pickle(PREPARED_DATA_PATH)
+            if payload.get("cache_version") == CACHE_VERSION:
+                return (
+                    payload["df"],
+                    payload["issue_long"],
+                    payload["support_long"],
+                    payload["game_long"],
+                )
+        except Exception:
+            pass
 
     df = pd.read_excel(DATA_PATH)
     df = df.copy()
@@ -1798,18 +1808,6 @@ else:
 record_status_slot.markdown(
     f"<div class='record-status'>Showing {len(filtered):,} of {len(df):,} records | Date selected: {date_selected_label}</div>",
     unsafe_allow_html=True,
-)
-
-render_filter_chips(
-    [
-        ("Camp", format_selection(selected_settlements, settlement_explicit, "All camps"), settlement_explicit),
-        ("Specific location", format_selection(selected_locations, location_explicit, "All locations"), location_explicit),
-        ("CFS / site", format_selection(selected_cfs, cfs_explicit, "All sites"), cfs_explicit),
-        ("Staff / CPV", format_selection(selected_staff, staff_explicit, "All staff"), staff_explicit),
-        ("Gender", format_selection(selected_gender, gender_explicit, "All genders"), gender_explicit),
-        ("Age group", format_selection(selected_age, age_explicit, "All age groups"), age_explicit),
-        ("Disability", format_selection(selected_disability, disability_explicit, "All statuses"), disability_explicit),
-    ]
 )
 
 summary_bits = [
