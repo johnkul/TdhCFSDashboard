@@ -18,14 +18,15 @@ DATA_PATH = DATA_DIR / DATA_FILE_NAME
 if not DATA_PATH.exists() and LOCAL_DATA_FALLBACK.exists():
     DATA_PATH = LOCAL_DATA_FALLBACK
 LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
+CSS_PATH = BASE_DIR / "assets" / "styles.css"
 PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
-CACHE_VERSION = "cfs-dashboard-prepared-v13"
+CACHE_VERSION = "cfs-dashboard-prepared-v15"
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
 AGE_GROUP_ORDER = ["0-5 years", "6-12 years", "13-17 years", MISSING]
 YES_NO_ORDER = ["Yes", "No", MISSING]
-GENDER_ORDER = ["Boy", "Girl", "Other", MISSING]
+GENDER_ORDER = ["Girls", "Boys", "Transgender", MISSING]
 TOP_N_OPTIONS = [5, 10, 15, 25]
 
 ISSUE_COLUMNS = {
@@ -288,13 +289,28 @@ def clean_gender(value):
     key = norm_text(value)
     if not key:
         return MISSING
-    if key in {"boy", "male", "m"}:
-        return "Boy"
-    if key in {"girl", "female", "f"}:
-        return "Girl"
-    if key in {"other", "others", "non binary", "nonbinary", "other gender"}:
-        return "Other"
-    return "Other"
+    if key in {"girl", "girls", "female", "f"}:
+        return "Girls"
+    if key in {"boy", "boys", "male", "m"}:
+        return "Boys"
+    if key in {
+        "transgender",
+        "trans gender",
+        "trans",
+        "tg",
+        "other",
+        "others",
+        "other gender",
+        "other specify",
+        "others specify",
+        "specify other",
+        "trans boy",
+        "trans girl",
+        "trans male",
+        "trans female",
+    }:
+        return "Transgender"
+    return MISSING
 
 
 def is_yes(value):
@@ -699,24 +715,21 @@ def top_n_chart_control(data, category_col, key, label="Chart category slicer", 
     control_signature = dataframe_signature(data)
     control_key = f"{key}_{control_signature}"
     default_index = 0
-    mode_col, count_col = st.columns([1, 1.4])
-    with mode_col:
-        mode = st.radio(
-            label,
-            ["Highest", "Lowest"],
-            index=0,
-            horizontal=True,
-            key=f"chart_rank_mode_{control_key}",
-            help="This limits the chart only. The table above remains complete.",
-        )
-    with count_col:
-        selected_n = st.radio(
-            "Number of categories",
-            TOP_N_OPTIONS,
-            index=default_index,
-            horizontal=True,
-            key=f"chart_top_n_{control_key}",
-        )
+    mode = st.radio(
+        label,
+        ["Highest", "Lowest"],
+        index=0,
+        horizontal=False,
+        key=f"chart_rank_mode_{control_key}",
+        help="This limits the chart only. The table above remains complete.",
+    )
+    selected_n = st.radio(
+        "Number of categories",
+        TOP_N_OPTIONS,
+        index=default_index,
+        horizontal=False,
+        key=f"chart_top_n_{control_key}",
+    )
     totals = data.groupby(category_col, observed=False)["Count"].sum().sort_values(ascending=(mode == "Lowest"))
     keep = totals.head(selected_n).index
     return data[data[category_col].isin(keep)].copy()
@@ -845,24 +858,37 @@ def table_image_download(table, key, title):
     scoped_key = f"{key}_{current_signature}"
     image_key = f"table_png_{scoped_key}"
     message_key = f"table_png_message_{scoped_key}"
-    prep_col, download_col = st.columns([1, 1.2])
+    st.markdown("<div class='export-row'>", unsafe_allow_html=True)
+    prep_col, download_col, csv_col = st.columns([1, 1, 1])
     with prep_col:
-        if st.button("Prepare current table image", key=f"prepare_table_{scoped_key}", use_container_width=True):
+        if st.button("Generate table PNG", key=f"prepare_table_{scoped_key}", use_container_width=True):
             image, message = dataframe_to_png_bytes(table, title)
             st.session_state[image_key] = image
             st.session_state[message_key] = message
     with download_col:
         if st.session_state.get(image_key):
             st.download_button(
-                "Download table image",
+                "Download table PNG",
                 data=st.session_state[image_key],
                 file_name=f"{file_slug(title)}.png",
                 mime="image/png",
                 key=f"download_table_{scoped_key}",
                 use_container_width=True,
             )
+        else:
+            st.button("Download table PNG", key=f"download_table_placeholder_{scoped_key}", disabled=True, use_container_width=True)
+    with csv_col:
+        st.download_button(
+            "Download table CSV",
+            data=flatten_table_for_export(table).to_csv(index=False).encode("utf-8"),
+            file_name=f"{file_slug(title)}.csv",
+            mime="text/csv",
+            key=f"download_table_csv_{scoped_key}",
+            use_container_width=True,
+        )
     if st.session_state.get(message_key):
         st.caption(st.session_state[message_key])
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_table(table, key, title, simple=False):
@@ -875,9 +901,10 @@ def chart_image_download(fig, key, title):
     scoped_key = f"{key}_{current_signature}"
     image_key = f"chart_png_{scoped_key}"
     message_key = f"chart_png_message_{scoped_key}"
-    prep_col, download_col = st.columns([1, 1.2])
+    st.markdown("<div class='export-row'>", unsafe_allow_html=True)
+    prep_col, download_col = st.columns([1, 1])
     with prep_col:
-        if st.button("Prepare current chart image", key=f"prepare_chart_{scoped_key}", use_container_width=True):
+        if st.button("Generate chart PNG", key=f"prepare_chart_{scoped_key}", use_container_width=True):
             try:
                 st.session_state[image_key] = fig.to_image(format="png", scale=2)
                 st.session_state[message_key] = None
@@ -887,15 +914,18 @@ def chart_image_download(fig, key, title):
     with download_col:
         if st.session_state.get(image_key):
             st.download_button(
-                "Download chart image",
+                "Download chart PNG",
                 data=st.session_state[image_key],
                 file_name=f"{file_slug(title)}.png",
                 mime="image/png",
                 key=f"download_chart_{scoped_key}",
                 use_container_width=True,
             )
+        else:
+            st.button("Download chart PNG", key=f"download_chart_placeholder_{scoped_key}", disabled=True, use_container_width=True)
     if st.session_state.get(message_key):
         st.caption(st.session_state[message_key])
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def multi_response_tables(long_data, value_col, label):
@@ -1034,6 +1064,18 @@ def pie_chart(data, names, values, title=""):
         },
     )
     chart_image_download(fig, chart_key, title)
+
+
+def sliced_bar_chart(data, category_col, slicer_key, x, y, color=None, title="", horizontal=False, height=420, category_orders=None, default=10):
+    if data.empty or category_col not in data.columns or data[category_col].nunique(dropna=True) <= min(TOP_N_OPTIONS):
+        bar_chart(data, x, y, color, title, horizontal, height, category_orders)
+        return
+    control_col, chart_col = st.columns([0.23, 0.77])
+    with control_col:
+        st.markdown("<div class='chart-control-title'>Chart controls</div>", unsafe_allow_html=True)
+        chart_data = top_n_chart_control(data, category_col, slicer_key, default=default)
+    with chart_col:
+        bar_chart(chart_data, x, y, color, title, horizontal, height, category_orders)
 
 
 
@@ -1198,6 +1240,100 @@ def yes_count(data, column):
     return int(data[column].astype("string").eq("Yes").sum())
 
 
+def render_badges(items):
+    if not items:
+        return
+    badge_html = "".join(f"<span class='status-badge status-{kind}'>{label}</span>" for label, kind in items)
+    st.markdown(f"<div class='badge-row'>{badge_html}</div>", unsafe_allow_html=True)
+
+
+def render_filter_chips(items):
+    chips = []
+    for label, value, active in items:
+        css_class = "filter-chip active" if active else "filter-chip"
+        chips.append(f"<span class='{css_class}'><strong>{label}</strong>: {value}</span>")
+    st.markdown(f"<div class='filter-chip-row'>{''.join(chips)}</div>", unsafe_allow_html=True)
+
+
+def category_share_insight(data, category_col, subject, value_col="Count"):
+    if data.empty or category_col not in data.columns or value_col not in data.columns:
+        return f"No {subject.lower()} are available for the current filters."
+    totals = data.groupby(category_col, observed=False)[value_col].sum().sort_values(ascending=False)
+    totals = totals[totals > 0]
+    if totals.empty:
+        return f"No {subject.lower()} are available for the current filters."
+    top_label = str(totals.index[0])
+    top_value = int(totals.iloc[0])
+    total_value = int(totals.sum())
+    share = top_value / total_value if total_value else 0
+    return f"{top_label} is the leading {subject.lower()}, accounting for {share:.1%} of {total_value:,} records in the current filter."
+
+
+def render_note(text):
+    if text:
+        st.markdown(f"<div class='insight-note'>{text}</div>", unsafe_allow_html=True)
+
+
+def render_analysis_block(title, table, chart_renderer, note, key, simple=False, badges=None):
+    st.markdown(f"<div class='analysis-title'>{title}</div>", unsafe_allow_html=True)
+    render_badges(badges or [])
+    chart_tab, table_tab, notes_tab = st.tabs(["Chart", "Table", "Notes"])
+    with chart_tab:
+        chart_renderer()
+    with table_tab:
+        render_table(table, f"{key}_table", title, simple=simple)
+    with notes_tab:
+        render_note(note)
+
+
+def dashboard_nav(options, key="dashboard_section"):
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = options[0]
+    if hasattr(st, "pills"):
+        try:
+            selected = st.pills(
+                "Dashboard section",
+                options,
+                selection_mode="single",
+                key=key,
+                label_visibility="collapsed",
+            )
+            return selected or options[0]
+        except Exception:
+            pass
+    if hasattr(st, "segmented_control"):
+        try:
+            selected = st.segmented_control(
+                "Dashboard section",
+                options,
+                key=key,
+                label_visibility="collapsed",
+            )
+            return selected or options[0]
+        except Exception:
+            pass
+    return st.radio(
+        "Dashboard section",
+        options,
+        index=options.index(st.session_state.get(key, options[0])),
+        key=key,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+
+def load_external_css(path):
+    if not path.exists():
+        return
+    try:
+        css = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        st.caption(f"Custom CSS could not be loaded: {exc}")
+        return
+    if css.strip():
+        st.markdown(f"<style>\n{css}\n</style>", unsafe_allow_html=True)
+
+
 st.set_page_config(
     page_title="Tdh Kenya CFS Dashboard",
     page_icon="CFS",
@@ -1284,6 +1420,103 @@ st.markdown(
         color: #213547;
         margin-bottom: 1rem;
         font-size: .95rem;
+    }
+    .filter-group-title {
+        margin: .9rem 0 .35rem 0;
+        padding: .45rem .65rem;
+        border-left: 4px solid var(--brand);
+        background: #eef6ff;
+        color: #0f172a;
+        font-weight: 900;
+        border-radius: 6px;
+    }
+    .filter-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .45rem;
+        margin: -.25rem 0 1rem 0;
+    }
+    .filter-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: .25rem;
+        padding: .45rem .65rem;
+        border-radius: 999px;
+        border: 1px solid #d5dee9;
+        background: #ffffff;
+        color: #334155;
+        font-size: .85rem;
+        font-weight: 700;
+    }
+    .filter-chip.active {
+        border-color: #8fc3f2;
+        background: #eaf5ff;
+        color: #0b4f84;
+    }
+    .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .4rem;
+        margin: .25rem 0 .65rem 0;
+    }
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: .32rem .55rem;
+        border-radius: 999px;
+        font-size: .76rem;
+        font-weight: 900;
+        border: 1px solid #d5dee9;
+    }
+    .status-good {
+        background: #ecfdf3;
+        border-color: #b7e4c7;
+        color: #166534;
+    }
+    .status-review {
+        background: #fff7ed;
+        border-color: #fed7aa;
+        color: #9a3412;
+    }
+    .status-harmonized {
+        background: #eef6ff;
+        border-color: #bfdbfe;
+        color: #1d4ed8;
+    }
+    .status-missing {
+        background: #f8fafc;
+        border-color: #cbd5e1;
+        color: #475569;
+    }
+    .analysis-title {
+        margin: 1.15rem 0 .2rem 0;
+        padding-top: .35rem;
+        color: #0f172a;
+        font-size: 1.2rem;
+        line-height: 1.3;
+        font-weight: 900;
+    }
+    .chart-control-title {
+        margin: .45rem 0 .65rem 0;
+        padding: .55rem .65rem;
+        border-radius: 8px;
+        border: 1px solid #d5dee9;
+        background: #f8fbff;
+        color: #0f172a;
+        font-size: .9rem;
+        font-weight: 900;
+        text-align: center;
+    }
+    .insight-note {
+        padding: .9rem 1rem;
+        border-radius: 8px;
+        border: 1px solid #d5dee9;
+        background: #fbfdff;
+        color: #1f2937;
+        font-weight: 700;
+    }
+    .export-row {
+        margin: .35rem 0 1rem 0;
     }
     .metric-card {
         border: 1px solid var(--line);
@@ -1402,6 +1635,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+load_external_css(CSS_PATH)
+
 title_col, logo_col = st.columns([5, 1])
 with title_col:
     st.markdown(
@@ -1437,7 +1672,17 @@ modified_time = DATA_PATH.stat().st_mtime
 df, issue_long, support_long, game_long = load_and_prepare(modified_time)
 
 st.sidebar.header("Filters")
+reset_col, refresh_col = st.sidebar.columns(2)
+with reset_col:
+    if st.button("Reset filters", use_container_width=True):
+        for state_key in list(st.session_state.keys()):
+            if state_key.startswith("filter_") or state_key in {"date_filter", "date_from_filter", "date_to_filter"}:
+                st.session_state.pop(state_key, None)
+        st.rerun()
+with refresh_col:
+    st.caption("Reset keeps the prepared data cache.")
 st.sidebar.caption("Use each level in order. Later filters unlock after the location path is defined.")
+st.sidebar.markdown("<div class='filter-group-title'>Date & Location Filters</div>", unsafe_allow_html=True)
 valid_dates = df["date"].dropna()
 if valid_dates.empty:
     st.sidebar.warning("No valid dates found in the data.")
@@ -1485,6 +1730,7 @@ selected_cfs, cfs_explicit = multi_choice_selector(
 )
 cfs_scope = apply_filter(location_scope, "cfs_clean", selected_cfs, cfs_explicit)
 
+st.sidebar.markdown("<div class='filter-group-title'>Operational Filters</div>", unsafe_allow_html=True)
 downstream_disabled = cfs_disabled or not cfs_explicit or not selected_cfs or cfs_scope.empty
 selected_staff, staff_explicit = multi_choice_selector(
     "5. Staff / CPV",
@@ -1495,6 +1741,7 @@ selected_staff, staff_explicit = multi_choice_selector(
 )
 staff_scope = apply_filter(cfs_scope, "staff_clean", selected_staff, staff_explicit)
 
+st.sidebar.markdown("<div class='filter-group-title'>Beneficiary Filters</div>", unsafe_allow_html=True)
 selected_gender, gender_explicit = multi_choice_selector(
     "6. Gender",
     staff_scope["gender_clean"] if not staff_scope.empty else [],
@@ -1551,6 +1798,18 @@ else:
 record_status_slot.markdown(
     f"<div class='record-status'>Showing {len(filtered):,} of {len(df):,} records | Date selected: {date_selected_label}</div>",
     unsafe_allow_html=True,
+)
+
+render_filter_chips(
+    [
+        ("Camp", format_selection(selected_settlements, settlement_explicit, "All camps"), settlement_explicit),
+        ("Specific location", format_selection(selected_locations, location_explicit, "All locations"), location_explicit),
+        ("CFS / site", format_selection(selected_cfs, cfs_explicit, "All sites"), cfs_explicit),
+        ("Staff / CPV", format_selection(selected_staff, staff_explicit, "All staff"), staff_explicit),
+        ("Gender", format_selection(selected_gender, gender_explicit, "All genders"), gender_explicit),
+        ("Age group", format_selection(selected_age, age_explicit, "All age groups"), age_explicit),
+        ("Disability", format_selection(selected_disability, disability_explicit, "All statuses"), disability_explicit),
+    ]
 )
 
 summary_bits = [
@@ -1621,7 +1880,6 @@ try:
 except TypeError:
     quick_panel = st.container()
 with quick_panel:
-    st.markdown("<div class='quick-insights'>", unsafe_allow_html=True)
     qi1, qi2, qi3, qi4 = st.tabs(["Coverage", "Demographics", "Protection & Support", "Engagement & Referrals"])
     with qi1:
         c1, c2, c3, c4 = st.columns(4)
@@ -1663,170 +1921,236 @@ with quick_panel:
             insight_card("Top referral destination", top_referral_dest, f"{top_referral_dest_count:,} records")
         with c4:
             insight_card("External agency records", f"{filtered['external_referral_agency_clean'].astype('string').ne(MISSING).sum():,}", "Where agency is specified")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div class='section-heading dashboard-section-heading'>Dashboard Section</div>", unsafe_allow_html=True)
 st.markdown("<div class='section-subtitle'>Select the analytical view you want to explore.</div>", unsafe_allow_html=True)
 section_options = [
     "Overview",
-    "CPVs Data KPIs",
-    "CFS Beneficiary Demographics",
-    "Games & Activities Engaged",
-    "Protection Issues & Support Offered",
+    "CPVs KPIs",
+    "Demographics",
+    "Games & Activities",
+    "Protection & Support",
     "Referrals",
-    "Data Quality & Harmonization",
+    "Data Quality",
 ]
-if st.session_state.get("dashboard_section") not in section_options:
-    st.session_state["dashboard_section"] = "Overview"
-section = st.radio(
-    "Dashboard section",
-    section_options,
-    index=0,
-    key="dashboard_section",
-    horizontal=True,
-    label_visibility="collapsed",
-)
+section = dashboard_nav(section_options)
 
 if section == "Overview":
     st.subheader("Overview")
-    st.caption("This overview refreshes from the current filter path and gives a quick operating picture before moving into the detailed dashboard sections.")
-    st.markdown("#### Camp Records by Gender - Table")
+    st.caption("A focused landing view for the current filter path, with each topic separated into Chart, Table, and Notes.")
+    o1, o2, o3, o4 = st.columns(4)
+    with o1:
+        metric_card("CFS visits", f"{len(filtered):,}", "Current filter")
+    with o2:
+        metric_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count")
+    with o3:
+        metric_card("Support mentions", f"{len(support_context):,}", "Multi-response count")
+    with o4:
+        metric_card("Referral rate", f"{referral_rate:.1%}", "Referral marked Yes")
+
     overview_camp_table = table_with_total(filtered, ["settlement_clean"], ["gender_clean"])
-    render_table(overview_camp_table, "overview_camp_records", "Overview Camp Records by Gender")
-
-    st.markdown("#### Camp Records by Gender - Chart")
     overview_camp_chart = count_table(filtered, ["settlement_clean", "gender_clean"])
-    overview_camp_chart = top_n_chart_control(overview_camp_chart, "settlement_clean", "overview_camps")
-    bar_chart(overview_camp_chart, "Count", "settlement_clean", "gender_clean", "Overview camp records by gender", horizontal=True, height=420)
+    render_analysis_block(
+        "Coverage: Camp Records by Gender",
+        overview_camp_table,
+        lambda: sliced_bar_chart(overview_camp_chart, "settlement_clean", "overview_camps", "Count", "settlement_clean", "gender_clean", "Overview camp records by gender", horizontal=True, height=420),
+        category_share_insight(overview_camp_chart, "settlement_clean", "camp"),
+        "overview_camp_records",
+        badges=[("Filtered", "good"), ("Top 5 default", "harmonized")],
+    )
 
-    st.divider()
-    st.markdown("#### Age Group by Gender - Table")
     overview_age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
-    render_table(overview_age_table, "overview_age_group", "Overview Age Group by Gender")
-
-    st.markdown("#### Age Group by Gender - Chart")
     overview_age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
-    bar_chart(overview_age_chart, "age_group", "Count", "gender_clean", "Overview age group by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
+    render_analysis_block(
+        "Beneficiary Profile: Age Group by Gender",
+        overview_age_table,
+        lambda: bar_chart(overview_age_chart, "age_group", "Count", "gender_clean", "Overview age group by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER}),
+        category_share_insight(overview_age_chart, "age_group", "age group"),
+        "overview_age_group",
+        badges=[("Age order locked", "good"), ("Gender categories aligned", "harmonized")],
+    )
 
-    st.divider()
-    st.markdown("#### Top Reported Issues - Table")
     overview_issue_table = table_with_total(issue_context, ["issue_clean"], ["gender_clean"])
-    render_table(overview_issue_table, "overview_issue_records", "Overview Top Reported Issues")
-
-    st.markdown("#### Top Reported Issues - Chart")
     overview_issue_chart = count_table(issue_context, ["issue_clean", "gender_clean"])
-    overview_issue_chart = top_n_chart_control(overview_issue_chart, "issue_clean", "overview_issues")
-    bar_chart(overview_issue_chart, "Count", "issue_clean", "gender_clean", "Overview top reported issues", horizontal=True, height=520)
+    render_analysis_block(
+        "Protection: Top Reported Issues",
+        overview_issue_table,
+        lambda: sliced_bar_chart(overview_issue_chart, "issue_clean", "overview_issues", "Count", "issue_clean", "gender_clean", "Overview top reported issues", horizontal=True, height=520),
+        category_share_insight(overview_issue_chart, "issue_clean", "reported issue"),
+        "overview_issue_records",
+        badges=[("Multi-response", "review"), ("Harmonized specify values", "harmonized")],
+    )
 
-    st.divider()
-    st.markdown("#### Top Games / Activities - Table")
     overview_game_table = table_with_total(game_context, ["game_clean"], ["gender_clean"])
-    render_table(overview_game_table, "overview_game_records", "Overview Top Games and Activities")
-
-    st.markdown("#### Top Games / Activities - Chart")
     overview_game_chart = count_table(game_context, ["game_clean", "gender_clean"])
-    overview_game_chart = top_n_chart_control(overview_game_chart, "game_clean", "overview_games")
-    bar_chart(overview_game_chart, "Count", "game_clean", "gender_clean", "Overview top games and activities", horizontal=True, height=520)
+    render_analysis_block(
+        "Activities & Referrals: Top Games / Activities",
+        overview_game_table,
+        lambda: sliced_bar_chart(overview_game_chart, "game_clean", "overview_games", "Count", "game_clean", "gender_clean", "Overview top games and activities", horizontal=True, height=520),
+        category_share_insight(overview_game_chart, "game_clean", "game or activity"),
+        "overview_game_records",
+        badges=[("Take 5 harmonized", "harmonized"), ("Chart limited only", "good")],
+    )
 
-if section == "CPVs Data KPIs":
-    st.subheader("CPV / Staff Data Submission")
+if section == "CPVs KPIs":
     staff_table = table_with_total(filtered, ["staff_clean"], ["gender_clean"])
     staff_table = add_interview_date_columns(staff_table, filtered, "staff_clean", "date")
-    render_table(staff_table, "staff_submission", "CPV / Staff Data Submission")
     staff_chart = count_table(filtered, ["staff_clean", "gender_clean"])
-    staff_chart = top_n_chart_control(staff_chart, "staff_clean", "staff", default=15)
-    bar_chart(staff_chart, "Count", "staff_clean", "gender_clean", "Top staff filling forms by gender", horizontal=True, height=680)
-    section_note("Staff names are harmonized dynamically using exact mappings and fuzzy similarity so spelling variations are grouped together.")
+    render_analysis_block(
+        "CPV / Staff Data Submission",
+        staff_table,
+        lambda: sliced_bar_chart(staff_chart, "staff_clean", "staff", "Count", "staff_clean", "gender_clean", "Top staff filling forms by gender", horizontal=True, height=680, default=15),
+        "Staff names are harmonized dynamically using exact mappings and fuzzy similarity so spelling variations are grouped together. First and latest interview dates are shown in the table after Total.",
+        "staff_submission",
+        badges=[("First/latest dates", "good"), ("Staff harmonized", "harmonized")],
+    )
 
     st.divider()
-    st.subheader("Settlement, Location & CFS Distribution")
     site_table = table_with_total(filtered, ["settlement_clean", "location_clean", "cfs_clean"], ["gender_clean"])
-    render_table(site_table, "site_distribution", "Settlement, Location & CFS Distribution")
     site_chart = count_table(filtered, ["cfs_clean", "gender_clean"])
-    site_chart = top_n_chart_control(site_chart, "cfs_clean", "site_distribution", default=15)
-    bar_chart(site_chart, "Count", "cfs_clean", "gender_clean", "CFS / site records by gender", horizontal=True, height=600)
+    render_analysis_block(
+        "Camp, Location & CFS Distribution",
+        site_table,
+        lambda: sliced_bar_chart(site_chart, "cfs_clean", "site_distribution", "Count", "cfs_clean", "gender_clean", "CFS / site records by gender", horizontal=True, height=600, default=15),
+        category_share_insight(site_chart, "cfs_clean", "CFS / site"),
+        "site_distribution",
+        badges=[("Linked location filters", "good"), ("Chart limited only", "harmonized")],
+    )
 
-if section == "CFS Beneficiary Demographics":
-    st.subheader("First Visit to CFS")
+if section == "Demographics":
     first_visit_records = filtered[filtered["first_visit_clean"].astype("string").isin(["Yes", "No"])].copy()
     first_visit_records["first_visit_clean"] = pd.Categorical(first_visit_records["first_visit_clean"].astype("string"), categories=["Yes", "No"], ordered=True)
     first_visit_pie = count_table(first_visit_records, ["first_visit_clean"])
-    pie_chart(first_visit_pie, "first_visit_clean", "Count", "Overall first visit split")
+    first_visit_overall_table = add_grand_total_row(first_visit_pie, "first_visit_clean")
+    render_analysis_block(
+        "First Visit to CFS: Overall Split",
+        first_visit_overall_table,
+        lambda: pie_chart(first_visit_pie, "first_visit_clean", "Count", "Overall first visit split"),
+        category_share_insight(first_visit_pie, "first_visit_clean", "first-visit response"),
+        "first_visit_overall",
+        simple=True,
+        badges=[("Yes/No view", "good")],
+    )
 
-    st.markdown("#### First visit to CFS by Gender")
+    st.divider()
     first_visit_gender_table = table_with_total(first_visit_records, ["first_visit_clean"], ["gender_clean"])
-    render_table(first_visit_gender_table, "first_visit_gender", "First Visit to CFS by Gender")
     first_visit_gender_chart = count_table(first_visit_records, ["first_visit_clean", "gender_clean"])
-    bar_chart(
-        first_visit_gender_chart,
-        "Count",
-        "first_visit_clean",
-        "gender_clean",
-        "First visit to CFS by gender",
-        horizontal=True,
-        height=360,
-        category_orders={"gender_clean": GENDER_ORDER},
+    render_analysis_block(
+        "First Visit to CFS by Gender",
+        first_visit_gender_table,
+        lambda: bar_chart(
+            first_visit_gender_chart,
+            "Count",
+            "first_visit_clean",
+            "gender_clean",
+            "First visit to CFS by gender",
+            horizontal=True,
+            height=360,
+            category_orders={"gender_clean": GENDER_ORDER},
+        ),
+        "This view keeps the Yes and No first-visit responses and splits each by the standardized gender categories.",
+        "first_visit_gender",
+        badges=[("Gender aligned", "harmonized")],
     )
 
-    st.markdown("#### First visit to CFS by Site")
+    st.divider()
     first_visit_table = table_with_total(first_visit_records, ["cfs_clean"], ["first_visit_clean", "gender_clean"])
-    render_table(first_visit_table, "first_visit_site", "First Visit to CFS by Site")
     first_visit_chart = count_table(first_visit_records, ["cfs_clean", "first_visit_clean"])
-    first_visit_chart = top_n_chart_control(first_visit_chart, "cfs_clean", "first_visit_site", default=15)
-    bar_chart(
-        first_visit_chart,
-        "Count",
-        "cfs_clean",
-        "first_visit_clean",
-        "First visit to CFS by site",
-        horizontal=True,
-        height=620,
-        category_orders={"first_visit_clean": ["Yes", "No"]},
+    render_analysis_block(
+        "First Visit to CFS by Site",
+        first_visit_table,
+        lambda: sliced_bar_chart(
+            first_visit_chart,
+            "cfs_clean",
+            "first_visit_site",
+            "Count",
+            "cfs_clean",
+            "first_visit_clean",
+            "First visit to CFS by site",
+            horizontal=True,
+            height=620,
+            category_orders={"first_visit_clean": ["Yes", "No"]},
+            default=15,
+        ),
+        "The site table keeps CFS / site as the row field, with Yes and No as the top-level columns. Missing first-visit responses are excluded from this specific Yes/No view.",
+        "first_visit_site",
+        badges=[("CFS site rows", "good"), ("Missing excluded", "review")],
     )
-    section_note("The site table keeps CFS / site as the row field, with Yes and No as the top-level columns. Missing first-visit responses are excluded from this specific Yes/No view.")
 
     st.divider()
-    st.subheader("Gender by CFS")
     gender_cfs_table = table_with_total(filtered, ["cfs_clean"], ["gender_clean"])
-    render_table(gender_cfs_table, "gender_by_cfs", "Gender by CFS")
     gender_cfs_chart = count_table(filtered, ["cfs_clean", "gender_clean"])
-    gender_cfs_chart = top_n_chart_control(gender_cfs_chart, "cfs_clean", "gender_cfs", default=15)
-    bar_chart(gender_cfs_chart, "Count", "cfs_clean", "gender_clean", "Gender by CFS / site", horizontal=True, height=640)
+    render_analysis_block(
+        "Gender by CFS",
+        gender_cfs_table,
+        lambda: sliced_bar_chart(gender_cfs_chart, "cfs_clean", "gender_cfs", "Count", "cfs_clean", "gender_clean", "Gender by CFS / site", horizontal=True, height=640, default=15),
+        category_share_insight(gender_cfs_chart, "cfs_clean", "CFS / site"),
+        "gender_by_cfs",
+        badges=[("Girls / Boys / Transgender", "harmonized")],
+    )
 
     st.divider()
-    st.subheader("Age Group Breakdown by CFS & Gender")
     age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
-    render_table(age_table, "age_group_overall", "Age Group Breakdown")
-    age_cfs_table = table_with_total(filtered, ["cfs_clean"], ["age_group", "gender_clean"])
-    render_table(age_cfs_table, "age_group_cfs_gender", "Age Group Breakdown by CFS & Gender")
     age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
-    bar_chart(age_chart, "age_group", "Count", "gender_clean", "Overall age group distribution by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
+    render_analysis_block(
+        "Age Group Breakdown by Gender",
+        age_table,
+        lambda: bar_chart(age_chart, "age_group", "Count", "gender_clean", "Overall age group distribution by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER}),
+        "Age groups are fixed in child-development order: 0-5 years, 6-12 years, then 13-17 years.",
+        "age_group_overall",
+        badges=[("Age order locked", "good")],
+    )
 
-if section == "Protection Issues & Support Offered":
-    st.subheader("Disability Prevalence & Disability Types")
+    st.divider()
+    age_cfs_table = table_with_total(filtered, ["cfs_clean"], ["age_group", "gender_clean"])
+    age_cfs_chart = count_table(filtered, ["cfs_clean", "age_group"])
+    render_analysis_block(
+        "Age Group Breakdown by CFS & Gender",
+        age_cfs_table,
+        lambda: sliced_bar_chart(age_cfs_chart, "cfs_clean", "age_group_cfs_chart", "Count", "cfs_clean", "age_group", "Age group by CFS / site", horizontal=True, height=640, category_orders={"age_group": AGE_GROUP_ORDER}, default=15),
+        "This detailed table shows the CFS-level age and gender breakdown. The chart summarizes age group distribution by CFS while the table carries the full gender detail.",
+        "age_group_cfs_gender",
+        badges=[("Detailed table", "good")],
+    )
+
+if section == "Protection & Support":
     disability_table = table_with_total(filtered, ["disability_status_clean"], ["gender_clean"])
-    render_table(disability_table, "disability_prevalence", "Disability Prevalence")
     disability_chart = count_table(filtered, ["disability_status_clean", "gender_clean"])
-    bar_chart(disability_chart, "Count", "disability_status_clean", "gender_clean", "Disability prevalence by gender", horizontal=True, height=360)
+    render_analysis_block(
+        "Disability Prevalence",
+        disability_table,
+        lambda: bar_chart(disability_chart, "Count", "disability_status_clean", "gender_clean", "Disability prevalence by gender", horizontal=True, height=360),
+        category_share_insight(disability_chart, "disability_status_clean", "disability status"),
+        "disability_prevalence",
+        badges=[("Yes/No view", "good")],
+    )
 
-    st.markdown("#### Disability types")
+    st.divider()
     disability_yes = filtered[filtered["disability_status_clean"].astype("string").eq("Yes")].copy()
     disability_type_table = table_with_total(disability_yes[~disability_yes["disability_type_display"].isin([MISSING])], ["disability_type_display"], ["gender_clean"])
-    render_table(disability_type_table, "disability_types", "Disability Types")
     disability_chart_source = disability_yes[~disability_yes["disability_type_display"].isin([MISSING])].copy()
     disability_chart_source["disability_type_display"] = disability_chart_source["disability_type_display"].map(shorten_disability_type)
     disability_types = count_table(disability_chart_source, ["disability_type_display", "gender_clean"])
-    disability_types = top_n_chart_control(disability_types, "disability_type_display", "disability_types", default=10)
-    bar_chart(disability_types, "Count", "disability_type_display", "gender_clean", "Disability types by gender", horizontal=True, height=480)
-    section_note("Long disability type descriptions are shortened only for display. The original workbook values remain available in the exported cleaned data.")
+    render_analysis_block(
+        "Disability Types",
+        disability_type_table,
+        lambda: sliced_bar_chart(disability_types, "disability_type_display", "disability_types", "Count", "disability_type_display", "gender_clean", "Disability types by gender", horizontal=True, height=480, default=10),
+        "Long disability type descriptions are shortened only for display. The original workbook values remain available in the exported cleaned data.",
+        "disability_types",
+        badges=[("Readable chart labels", "harmonized")],
+    )
 
     st.divider()
-    st.subheader("Nature of Issues Reported")
     issue_table = table_with_total(issue_context, ["issue_clean"], ["gender_clean"])
-    render_table(issue_table, "nature_issues", "Nature of Issues Reported")
     issue_chart = count_table(issue_context, ["issue_clean", "gender_clean"])
-    issue_chart = top_n_chart_control(issue_chart, "issue_clean", "issues", default=15)
-    bar_chart(issue_chart, "Count", "issue_clean", "gender_clean", "Issues reported by gender", horizontal=True, height=720)
+    render_analysis_block(
+        "Nature of Issues Reported",
+        issue_table,
+        lambda: sliced_bar_chart(issue_chart, "issue_clean", "issues", "Count", "issue_clean", "gender_clean", "Issues reported by gender", horizontal=True, height=720, default=15),
+        category_share_insight(issue_chart, "issue_clean", "reported issue") + " Other/specify issue entries are harmonized into categories such as Take 5, Play / child engagement, Medical concern and GBV.",
+        "nature_issues",
+        badges=[("Multi-response", "review"), ("Specify harmonized", "harmonized")],
+    )
     issue_distribution, issue_combinations = multi_response_tables(issue_context, "issue_clean", "Issue")
     st.markdown("#### Multiple issues per child / record")
     issue_dist_col, issue_combo_col = st.columns([1, 1.8])
@@ -1837,14 +2161,18 @@ if section == "Protection Issues & Support Offered":
     st.markdown("#### Issues Captured by CPV / Staff")
     issue_staff_table = table_with_total(issue_context, ["staff_clean"], ["issue_clean"])
     render_table(issue_staff_table, "issues_by_cpv_staff", "Issues Captured by CPV / Staff")
-    section_note("The Other/specify issue entries are harmonized into readable categories such as Take 5, Play / child engagement, Medical concern and GBV.")
 
     st.divider()
-    st.subheader("Support Offered")
     support_table = table_with_total(support_context, ["support_clean"], ["gender_clean"])
-    render_table(support_table, "support_offered", "Support Offered")
     support_chart = count_table(support_context, ["support_clean", "gender_clean"])
-    bar_chart(support_chart, "Count", "support_clean", "gender_clean", "Support offered by gender", horizontal=True, height=420)
+    render_analysis_block(
+        "Support Offered",
+        support_table,
+        lambda: bar_chart(support_chart, "Count", "support_clean", "gender_clean", "Support offered by gender", horizontal=True, height=420),
+        category_share_insight(support_chart, "support_clean", "support type"),
+        "support_offered",
+        badges=[("Multi-response", "review")],
+    )
     support_distribution, support_combinations = multi_response_tables(support_context, "support_clean", "Support")
     st.markdown("#### Multiple support types per child / record")
     support_dist_col, support_combo_col = st.columns([1, 1.8])
@@ -1853,13 +2181,17 @@ if section == "Protection Issues & Support Offered":
     with support_combo_col:
         render_table(support_combinations, "support_combinations", "Most Common Support Combinations", simple=True)
 
-if section == "Games & Activities Engaged":
-    st.subheader("Games / Activities Engagement")
+if section == "Games & Activities":
     games_table = table_with_total(game_context, ["game_clean"], ["gender_clean"])
-    render_table(games_table, "games_activities", "Games / Activities Engagement")
     games_chart = count_table(game_context, ["game_clean", "gender_clean"])
-    games_chart = top_n_chart_control(games_chart, "game_clean", "games", default=15)
-    bar_chart(games_chart, "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680)
+    render_analysis_block(
+        "Games / Activities Engagement",
+        games_table,
+        lambda: sliced_bar_chart(games_chart, "game_clean", "games", "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680, default=15),
+        category_share_insight(games_chart, "game_clean", "game or activity") + " Take5 variants and Take 5 routine values are grouped under Take 5.",
+        "games_activities",
+        badges=[("Take 5 harmonized", "harmonized"), ("Chart limited only", "good")],
+    )
     game_distribution, game_combinations = multi_response_tables(game_context, "game_clean", "Game / activity")
     st.markdown("#### Multiple games / activities per child / record")
     game_dist_col, game_combo_col = st.columns([1, 1.8])
@@ -1869,36 +2201,44 @@ if section == "Games & Activities Engaged":
         render_table(game_combinations, "game_combinations", "Most Common Game / Activity Combinations", simple=True)
 
 if section == "Referrals":
-    st.subheader("Referral Destination If Yes")
     referrals = filtered[filtered["referral_made_clean"].astype("string").eq("Yes")].copy()
     referral_dest = referrals[referrals["referral_destination_grouped"].isin(["PSS", "Case Management", "Empowerment", "External referrals"])]
     referral_table = table_with_total(referral_dest, ["referral_destination_grouped"], ["gender_clean"])
-    render_table(referral_table, "referral_destination", "Referral Destination If Yes")
     referral_chart = count_table(referral_dest, ["referral_destination_grouped", "gender_clean"])
-    bar_chart(
-        referral_chart,
-        "Count",
-        "referral_destination_grouped",
-        "gender_clean",
-        "Referral destination by gender",
-        horizontal=True,
-        height=420,
+    render_analysis_block(
+        "Referral Destination If Yes",
+        referral_table,
+        lambda: bar_chart(
+            referral_chart,
+            "Count",
+            "referral_destination_grouped",
+            "gender_clean",
+            "Referral destination by gender",
+            horizontal=True,
+            height=420,
+        ),
+        category_share_insight(referral_chart, "referral_destination_grouped", "referral destination") + " External referral partners are intentionally excluded here and shown in the agency breakdown.",
+        "referral_destination",
+        badges=[("Four destination groups", "good")],
     )
-    section_note("External referral partners are intentionally excluded from this table and shown separately below.")
 
     st.divider()
-    st.subheader("External Referral Agency Breakdown")
     external = referrals[
         referrals["referral_destination_grouped"].eq("External referrals")
         & ~referrals["external_referral_agency_clean"].isin([MISSING, "Unknown", REVIEW])
     ].copy()
     external_table = table_with_total(external, ["external_referral_agency_clean"], ["gender_clean"])
-    render_table(external_table, "external_referral_agencies", "External Referral Agency Breakdown")
     external_chart = count_table(external, ["external_referral_agency_clean", "gender_clean"])
-    external_chart = top_n_chart_control(external_chart, "external_referral_agency_clean", "external_agency", default=15)
-    bar_chart(external_chart, "Count", "external_referral_agency_clean", "gender_clean", "External referral agencies by gender", horizontal=True, height=600)
+    render_analysis_block(
+        "External Referral Agency Breakdown",
+        external_table,
+        lambda: sliced_bar_chart(external_chart, "external_referral_agency_clean", "external_agency", "Count", "external_referral_agency_clean", "gender_clean", "External referral agencies by gender", horizontal=True, height=600, default=15),
+        category_share_insight(external_chart, "external_referral_agency_clean", "external agency"),
+        "external_referral_agencies",
+        badges=[("Agency names harmonized", "harmonized"), ("Unknown removed", "review")],
+    )
 
-if section == "Data Quality & Harmonization":
+if section == "Data Quality":
     st.subheader("Data Quality & Harmonization Review")
     q1, q2, q3, q4 = st.columns(4)
     with q1:
@@ -1910,7 +2250,6 @@ if section == "Data Quality & Harmonization":
     with q4:
         metric_card("Issue Other harmonized", f"{filtered['issue_other_specify'].notna().sum():,}")
 
-    st.markdown("#### Harmonized staff name review")
     staff_review = (
         filtered.groupby(["staff_filling_form", "staff_clean"], dropna=False, observed=False)
         .size()
@@ -1918,9 +2257,18 @@ if section == "Data Quality & Harmonization":
         .sort_values("Count", ascending=False)
     )
     staff_review = top_n_with_total(staff_review, 80, "staff_filling_form")
-    render_table(staff_review, "staff_harmonization_review", "Harmonized Staff Name Review", simple=True)
+    staff_review_chart = staff_review[staff_review["staff_filling_form"].astype("string").ne("Grand Total")].head(20).copy()
+    render_analysis_block(
+        "Harmonized Staff Name Review",
+        staff_review,
+        lambda: bar_chart(staff_review_chart, "Count", "staff_clean", title="Top harmonized staff names", horizontal=True, height=560),
+        "This review shows the raw staff entry beside the cleaned staff name, making spelling corrections auditable.",
+        "staff_harmonization_review",
+        simple=True,
+        badges=[("Harmonized", "harmonized")],
+    )
 
-    st.markdown("#### Other issue specification review")
+    st.divider()
     issue_review = (
         filtered[filtered["issue_other_specify"].notna()]
         .groupby(["issue_other_specify", "issue_other_specify_clean"], dropna=False, observed=False)
@@ -1929,9 +2277,18 @@ if section == "Data Quality & Harmonization":
         .sort_values("Count", ascending=False)
     )
     issue_review = top_n_with_total(issue_review, 80, "issue_other_specify")
-    render_table(issue_review, "issue_other_review", "Other Issue Specification Review", simple=True)
+    issue_review_chart = issue_review[issue_review["issue_other_specify"].astype("string").ne("Grand Total")].head(20).copy()
+    render_analysis_block(
+        "Other Issue Specification Review",
+        issue_review,
+        lambda: bar_chart(issue_review_chart, "Count", "issue_other_specify_clean", title="Top harmonized issue specifications", horizontal=True, height=560),
+        "This review makes the Other/specify harmonization transparent, including Take 5 and protection-related recoding.",
+        "issue_other_review",
+        simple=True,
+        badges=[("Specify harmonized", "harmonized")],
+    )
 
-    st.markdown("#### Disability display label review")
+    st.divider()
     disability_review = (
         filtered[filtered["disability_type"].notna()]
         .groupby(["disability_type", "disability_type_display"], dropna=False, observed=False)
@@ -1940,4 +2297,13 @@ if section == "Data Quality & Harmonization":
         .sort_values("Count", ascending=False)
     )
     disability_review = add_grand_total_row(disability_review, "disability_type")
-    render_table(disability_review, "disability_label_review", "Disability Display Label Review", simple=True)
+    disability_review_chart = disability_review[disability_review["disability_type"].astype("string").ne("Grand Total")].head(20).copy()
+    render_analysis_block(
+        "Disability Display Label Review",
+        disability_review,
+        lambda: bar_chart(disability_review_chart, "Count", "disability_type_display", title="Top disability display labels", horizontal=True, height=520),
+        "This review confirms long disability descriptions are shortened for readability without changing the underlying workbook values.",
+        "disability_label_review",
+        simple=True,
+        badges=[("Readable labels", "harmonized")],
+    )
