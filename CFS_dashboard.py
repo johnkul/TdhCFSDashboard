@@ -63,15 +63,31 @@ SUPPORT_COLUMNS = {
     "support_none": "None",
 }
 
+def norm_text(value):
+    if pd.isna(value):
+        return ""
+    text = str(value).strip().lower()
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
 STAFF_MAP = {
+    # Mohamed Sidi
     "mohamed sidi": "Mohamed Sidi",
     "mohamed": "Mohamed Sidi",
+
+    # Halima Amin
     "halima amin": "Halima Amin",
+
+    # Moge Garad
     "moge garad": "Moge Garad",
     "moge": "Moge Garad",
     "more garad": "Moge Garad",
+
+    # Daud Hussein
     "daud hussein": "Daud Hussein",
-    "maryan": "Maryan",
+
+    # Maslah Mohamed Hassan
     "maslah mohamed hassan": "Maslah Mohamed Hassan",
     "maslah mohamed hasssan": "Maslah Mohamed Hassan",
     "maslah mohamed": "Maslah Mohamed Hassan",
@@ -80,56 +96,182 @@ STAFF_MAP = {
     "maslah kohamed hassan": "Maslah Mohamed Hassan",
     "maslah kohamed": "Maslah Mohamed Hassan",
     "maslsh mohamed hasssan": "Maslah Mohamed Hassan",
+
+    # Ndayikeje Ferdinand
     "ndayikeje ferdinand": "Ndayikeje Ferdinand",
     "ferdinand ndayikeje": "Ndayikeje Ferdinand",
     "ndayikeje": "Ndayikeje Ferdinand",
+    "ferdinand": "Ndayikeje Ferdinand",
+
+    # Teresia Natire Thomas
     "teresia natire thomas": "Teresia Natire Thomas",
     "teresia natire": "Teresia Natire Thomas",
+
+    # Haret Derow Ibrahim
     "haret derow ibrahim": "Haret Derow Ibrahim",
     "haret derow": "Haret Derow Ibrahim",
     "hared derow": "Haret Derow Ibrahim",
+
+    # Beatrice Akwero
     "beatrice akwero": "Beatrice Akwero",
+
+    # David Otifo
     "david otifo": "David Otifo",
+    "dave otifo": "David Otifo",
+
+    # Farah Mohamed Hussein
     "farah mohamed hussein": "Farah Mohamed Hussein",
+
+    # Musdaf Mohamed Hassan
     "musdaf mohamed hassan": "Musdaf Mohamed Hassan",
     "musdaf mohamed": "Musdaf Mohamed Hassan",
+
+    # Hirwa Gentille
     "hirwa gentille": "Hirwa Gentille",
+    "hirwa": "Hirwa Gentille",
+
+    # Oliek Omot
     "oliek omot": "Oliek Omot",
+
+    # Nelson Amanya
     "nelson amanya": "Nelson Amanya",
+
+    # Dimo Justin
     "dimo justin": "Dimo Justin",
     "dimo": "Dimo Justin",
+
+    # Louis Kyanza
     "louis kyanza": "Louis Kyanza",
+
+    # Dominic Nangiro Lomil
     "dominic nangiro lomil": "Dominic Nangiro Lomil",
+    "dominic nangiro": "Dominic Nangiro Lomil",
+
+    # Leer Biel Leer
     "leer biel leer": "Leer Biel Leer",
+
+    # Spora Niyikiza
     "spora niyikiza": "Spora Niyikiza",
     "niyikiza spora": "Spora Niyikiza",
+
+    # Jean Claude
     "jean claude": "Jean Claude",
+
+    # Fowzia Omar
     "fowzia omar": "Fowzia Omar",
+
+    # Yaak Akech
     "yaak akech": "Yaak Akech",
+    "aketch yaak": "Yaak Akech",
+    "akech yaak": "Yaak Akech",
+
+    # Peter Kingombe
     "peter kingombe": "Peter Kingombe",
+
+    # Dual Ador Arok
     "dual ador arok": "Dual Ador Arok",
     "dual ador": "Dual Ador Arok",
+    "ador arok dual": "Dual Ador Arok",
+
+    # Gatwech Bayak
     "gatwech bayak": "Gatwech Bayak",
+    "gatwech": "Gatwech Bayak",
+
+    # Armele Ngakani
     "armele ngakani": "Armele Ngakani",
+    "armele": "Armele Ngakani",
+
+    # John Wani
     "john wani": "John Wani",
+
+    # Safari David
     "safari david": "Safari David",
+    "safali": "Safari David",
+
+    # Epusie Brenda
     "epusie brenda": "Epusie Brenda",
+
+    # Zahara Issack
     "zahara issack": "Zahara Issack",
     "zahara": "Zahara Issack",
+
+    # Nyakhor Buob Tang
     "nyakhor buob": "Nyakhor Buob Tang",
     "nyqkhor buob tang": "Nyakhor Buob Tang",
     "nyakhor": "Nyakhor Buob Tang",
+
+    # Halimo Ahmed
     "halimo ahmed": "Halimo Ahmed",
     "halimo": "Halimo Ahmed",
+
+    # Agnes Ingiara
     "agnes ingiara": "Agnes Ingiara",
+    "agnes ingiara oreste": "Agnes Ingiara",
+
+    # Oweteshe Mirindi
     "oweteshe mirindi": "Oweteshe Mirindi",
+
+    # Rahmo Abdi
     "rahmo abdi": "Rahmo Abdi",
+
+    # Ongoro John
     "ongoro john": "Ongoro John",
+    "ongoro john tadeo": "Ongoro John",
+    "ongoro john tadeow": "Ongoro John",
+
+    # Abdikadir Osman
     "abdikadir osman": "Abdikadir Osman",
+
+    # Salma Said
     "salma said": "Salma Said",
+
+    # Abdiwakil Ali
     "abdiwakil ali": "Abdiwakil Ali",
+
+    # Manow Muse
     "manow muse": "Manow Muse",
+
+    # Jama Mohamed
     "jama mohamed": "Jama Mohamed",
+
+    # Lobono Peter
+    "lobono peter": "Lobono Peter",
+    "peter lobono": "Lobono Peter",
+
+    # Lino Lotino
+    "lino lotino": "Lino Lotino",
+
+    # Magnifique Ndayisenga
+    "magnifique ndayisenga": "Magnifique Ndayisenga",
+    "ndayisenga magnifique": "Magnifique Ndayisenga",
+    "magnifique": "Magnifique Ndayisenga",
+
+    # Rose Akii
+    "rose akii": "Rose Akii",
+
+    # Adams Odwa Peter
+    "adams odwa peter": "Adams Odwa Peter",
+
+    # Lokiro Mazkil Napao
+    "lokiro mazkil napao": "Lokiro Mazkil Napao",
+    "lokiro mazkil": "Lokiro Mazkil Napao",
+
+    # Kwarto Oliha
+    "kwarto oliha": "Kwarto Oliha",
+
+    # Gabriella Amani
+    "gabriella amani": "Gabriella Amani",
+
+    # Nyok Jennifer
+    "nyok jennifer": "Nyok Jennifer",
+
+    # Ohide Akech Viola
+    "ohide akech viola": "Ohide Akech Viola",
+
+    # Not a staff name
+    "21 04 2026": MISSING,
+    "kalobeyei reception centre": MISSING,
+    "kalobeyei reception center": MISSING,
 }
 
 LOCATION_MAP = {
@@ -225,14 +367,14 @@ AGENCY_MAP = {
     "dras and unchr": "UNHCR / DRS",
     "unhcr dras": "UNHCR / DRS",
     "dras unhcr": "UNHCR / DRS",
-    "lwf and dras": "LWF and DRS",
-    "lwf and drs": "LWF and DRS",
-    "dras and lwf": "DRS and LWF",
-    "drs and lwf": "DRS and LWF",
+    "lwf and dras": "LWF / DRS",
+    "lwf and drs": "LWF / DRS",
+    "dras and lwf": "DRS / LWF",
+    "drs and lwf": "DRS / LWF",
     "lwf": "LWF",
     "lwfl": "LWF",
-    "lwf education": "LWF Education",
-    "lwf education sector": "LWF Education",
+    "lwf education": "LWF",
+    "lwf education sector": "LWF",
     "hi": "HI",
     "wfp": "WFP",
     "pwj": "PWJ",
@@ -244,20 +386,34 @@ AGENCY_MAP = {
     "police and krcs": "Police / KRCS",
     "save the children": "Save the Children",
     "save children": "Save the Children",
-    "iftin primary": "Iftin Primary",
+    "primary": "LWF",
     "000": "Unknown",
     "n": "Unknown",
 }
 
+def build_lookup(mapping: dict) -> dict:
+    lookup = {}
+    for raw_key, canonical in mapping.items():
+        normalized = norm_text(raw_key)
+        if normalized:
+            lookup[normalized] = canonical
+    return lookup
 
-def norm_text(value):
-    if pd.isna(value):
-        return ""
-    text = str(value).strip().lower()
-    text = re.sub(r"[\r\n\t]+", " ", text)
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+# --- Pre-built normalized lookups (built once at startup) ---
+STAFF_LOOKUP        = None  # populated after norm_text is defined; see below
+LOCATION_LOOKUP     = None
+CFS_LOOKUP          = None
+GAME_LOOKUP         = None
+ISSUE_OTHER_LOOKUP  = None
+AGENCY_LOOKUP       = None
 
+# Build all lookups once at module load
+STAFF_LOOKUP       = build_lookup(STAFF_MAP)
+LOCATION_LOOKUP    = build_lookup(LOCATION_MAP)
+CFS_LOOKUP         = build_lookup(CFS_MAP)
+GAME_LOOKUP        = build_lookup(GAME_MAP)
+ISSUE_OTHER_LOOKUP = build_lookup(ISSUE_OTHER_MAP)
+AGENCY_LOOKUP      = build_lookup(AGENCY_MAP)
 
 def smart_title(value):
     if pd.isna(value) or str(value).strip() == "":
@@ -335,23 +491,39 @@ def harmonize_from_map(value, mapping, fallback_title=True):
     return smart_title(value) if fallback_title else value
 
 
-def fuzzy_harmonize(value, mapping, canonical_values=None, cutoff=0.86):
+def build_lookup(mapping: dict) -> dict:
+    lookup = {}
+    for raw_key, canonical in mapping.items():
+        normalized = norm_text(raw_key)
+        if normalized:
+            lookup[normalized] = canonical
+    return lookup
+
+def fuzzy_harmonize(value, lookup: dict, canonical_values=None, cutoff=0.86, fallback_title=True):
     key = norm_text(value)
     if not key:
         return MISSING
-    if key in mapping:
-        return mapping[key]
-    candidates = canonical_values or sorted(set(mapping.values()))
-    best_score = 0
-    best_value = None
+    if key in lookup:                          # O(1) — returns here for most rows
+        return lookup[key]
+    candidates = canonical_values or sorted(set(lookup.values()))
+    best_score = 0.0
+    best_match = None
     for candidate in candidates:
         score = SequenceMatcher(None, key, norm_text(candidate)).ratio()
         if score > best_score:
             best_score = score
-            best_value = candidate
-    if best_value and best_score >= cutoff:
-        return best_value
-    return smart_title(value)
+            best_match = candidate
+    if best_match and best_score >= cutoff:
+        return best_match
+    return smart_title(value) if fallback_title else value
+
+def harmonize_from_map(value, lookup: dict, fallback_title=True) -> str:
+    key = norm_text(value)
+    if not key:
+        return MISSING
+    if key in lookup:
+        return lookup[key]
+    return smart_title(value) if fallback_title else value
 
 
 def shorten_disability_type(value):
@@ -436,22 +608,22 @@ def clean_game(row):
     if is_take5_text(raw, other):
         return "Take 5"
     if raw_key in {"", "other", "others", "specify other"} and norm_text(other):
-        return fuzzy_harmonize(other, GAME_MAP, cutoff=0.84)
+        return fuzzy_harmonize(other, GAME_LOOKUP, cutoff=0.84)
     if norm_text(raw):
-        return fuzzy_harmonize(raw, GAME_MAP, cutoff=0.84)
+        return fuzzy_harmonize(raw, GAME_LOOKUP, cutoff=0.84)
     if norm_text(other):
-        return fuzzy_harmonize(other, GAME_MAP, cutoff=0.84)
+        return fuzzy_harmonize(other, GAME_LOOKUP, cutoff=0.84)
     return MISSING
 
 
 def clean_staff(value):
-    return fuzzy_harmonize(value, STAFF_MAP, cutoff=0.88)
+    return fuzzy_harmonize(value, STAFF_LOOKUP, cutoff=0.88)
 
 
 def clean_issue_other(value):
     if is_take5_text(value):
         return "Take 5"
-    return fuzzy_harmonize(value, ISSUE_OTHER_MAP, cutoff=0.84)
+    return fuzzy_harmonize(value, ISSUE_OTHER_LOOKUP, cutoff=0.84)
 
 
 def ordered_unique(series, order=None):
@@ -491,7 +663,7 @@ def load_and_prepare(modified_time):
     df["first_visit_clean"] = df["first_visit_tdh_cfs"].map(yes_no)
     df["referral_made_clean"] = df["referral_made"].map(yes_no)
     df["referral_destination_grouped"] = df["referral_destination"].map(clean_referral_destination)
-    df["external_referral_agency_clean"] = df["external_referral_agency"].map(lambda v: fuzzy_harmonize(v, AGENCY_MAP, cutoff=0.86))
+    df["external_referral_agency_clean"] = df["external_referral_agency"].map(lambda v: fuzzy_harmonize(v, AGENCY_LOOKUP, cutoff=0.86))
 
     df["age_clean"] = pd.to_numeric(df["child_age"], errors="coerce")
     df["age_group"] = df["age_clean"].map(age_group)
@@ -507,9 +679,9 @@ def load_and_prepare(modified_time):
 
     df["settlement_clean"] = df["camp_of_information_seeking"].map(lambda v: harmonize_from_map(v, {}, fallback_title=True))
     df["location_raw"] = df.apply(combine_location, axis=1)
-    df["location_clean"] = df["location_raw"].map(lambda v: fuzzy_harmonize(v, LOCATION_MAP, cutoff=0.86))
+    df["location_clean"] = df["location_raw"].map(lambda v: fuzzy_harmonize(v, LOCATION_LOOKUP, cutoff=0.86))
     df["cfs_raw"] = df.apply(combine_cfs, axis=1)
-    df["cfs_clean"] = df["cfs_raw"].map(lambda v: fuzzy_harmonize(v, CFS_MAP, cutoff=0.86))
+    df["cfs_clean"] = df["cfs_raw"].map(lambda v: fuzzy_harmonize(v, CFS_LOOKUP, cutoff=0.86))
     df["games_played_clean"] = df.apply(clean_game, axis=1)
     df["issue_other_specify_clean"] = df["issue_other_specify"].map(clean_issue_other)
 
