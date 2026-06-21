@@ -1,42 +1,110 @@
-from pathlib import Path
-from difflib import SequenceMatcher
-from io import BytesIO
+"""
+Tdh Kenya CFS Dashboard - Streamlit Application
+
+A professional, multi-section dashboard for analysing Child Friendly Spaces
+(CFS) data from TDH Kenya operations. It includes data loading, harmonisation,
+interactive filtering, charts, styled tables, and CSV exports.
+
+Usage:
+    streamlit run app.py
+
+Data options:
+    1. Place the Excel file at: data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx
+    2. Set environment variable CFS_DATA_PATH=/path/to/file.xlsx
+"""
+
+from __future__ import annotations
+
+import base64
 import hashlib
+import html as html_lib
+import os
 import re
 import time
+from difflib import SequenceMatcher
+from io import BytesIO
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
-
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-
-DATA_FILE_NAME = "CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx"
 DATA_DIR = BASE_DIR / "data"
-DATA_PATH = DATA_DIR / DATA_FILE_NAME
-
-LOCAL_DATA_FALLBACK = Path(
-    r"C:\Users\jekai\Desktop\DSC-Johntrial\CFS_Data\data"
-) / DATA_FILE_NAME
-
-if not DATA_PATH.exists() and LOCAL_DATA_FALLBACK.exists():
-    DATA_PATH = LOCAL_DATA_FALLBACK
-
+DATA_FILE_NAME = "CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx"
+DEFAULT_DATA_PATH = DATA_DIR / DATA_FILE_NAME
 LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
+DEVELOPER_LOGO_PATH = BASE_DIR / "assets" / "developer-logo.png"
 CSS_PATH = BASE_DIR / "assets" / "styles.css"
+APP_VERSION = "Version 1.0 · June 2026"
+PREPARED_CACHE_PATH = BASE_DIR / ".cfs_dashboard_prepared_cache.pkl"
+PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v2"
 
-PREPARED_DATA_PATH = DATA_DIR / "cfs_dashboard_prepared.pkl"
-PREPARED_CACHE_PATH = Path(__file__).with_name(".cfs_dashboard_prepared_cache.pkl")
-
-CACHE_VERSION = "cfs-dashboard-prepared-v16"
+RAW_TO_TRANSFORMED_COLUMNS = {
+    "Do you consent to participate?": "consent",
+    "Staff filling the form": "staff_filling_form",
+    "Enter a date": "date",
+    "Name of the Child (two names only)": "child_name",
+    "Age of the child.": "child_age",
+    "How does the child seeking information identify. ": "child_gender",
+    "How does the child seeking information identify.": "child_gender",
+    "Is the child living with disability?": "child_living_with_disability",
+    "What type of disability?": "disability_type",
+    "If Other, please specify the type of disability.": "disability_type_other",
+    "Individual Number of the child": "child_individual_number",
+    "Child's Caregiver/Parent Names (two names)": "caregiver_parent_names",
+    "Camp of information seeking.": "camp_of_information_seeking",
+    "Specific camp location of the information seeker.": "specific_camp_location",
+    "Section and Block residence of the information seeker": "section_block_residence",
+    "Camp camp location of the information seeker.": "camp_location_alt",
+    "Exact location of the information seeker (according to proof of registration)": "exact_registered_location",
+    "Child's caregiver or parent telephone number (if available, this is optional)": "caregiver_parent_phone",
+    "Name of the child friendly space the information seeker visited.": "child_friendly_space_visited",
+    "Name of the CFS the information seeker visited.": "cfs_visited",
+    "Which games did the child play/was engaged with?": "games_played",
+    "If other, specify the type of game involved.": "game_other_specify",
+    "Is this your first visit to any of Tdh`s CFS": "first_visit_tdh_cfs",
+    "Nature of Issues Reported": "nature_issues_reported_text",
+    "Nature of Issues Reported/New arrival/Lack of card": "issue_new_arrival_lack_of_card",
+    "Nature of Issues Reported/Disability": "issue_disability",
+    "Nature of Issues Reported/Basic needs": "issue_basic_needs",
+    "Nature of Issues Reported/Deceased parent": "issue_deceased_parent",
+    "Nature of Issues Reported/Education": "issue_education",
+    "Nature of Issues Reported/Psychosocial support": "issue_psychosocial_support",
+    "Nature of Issues Reported/Neglected": "issue_neglected",
+    "Nature of Issues Reported/Parents seperated": "issue_parents_separated",
+    "Nature of Issues Reported/Parents separated": "issue_parents_separated",
+    "Nature of Issues Reported/Child out of wedlock": "issue_child_out_of_wedlock",
+    "Nature of Issues Reported/Food": "issue_food",
+    "Nature of Issues Reported/Clothing": "issue_clothing",
+    "Nature of Issues Reported/Shelter": "issue_shelter",
+    "Nature of Issues Reported/Reporting a protection concern": "issue_reporting_protection_concern",
+    "Nature of Issues Reported/persons in need of profiling/registration by UNHCR": "issue_need_profiling_registration_unhcr",
+    "Nature of Issues Reported/None": "issue_none",
+    "Nature of Issues Reported/Other": "issue_other",
+    "If Other, specify": "issue_other_specify",
+    "Support offered": "support_offered_text",
+    "Support offered/Psychological First Aid": "support_psychological_first_aid",
+    "Support offered/Play and art therapy": "support_play_art_therapy",
+    "Support offered/Psychoeducation": "support_psychoeducation",
+    "Support offered/None": "support_none",
+    "Was a referral on the issue reported made?": "referral_made",
+    "If yes, where was it referred to?": "referral_destination",
+    "If External, please specify the agency referred to:": "external_referral_agency",
+}
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
-AGE_GROUP_ORDER = ["0-5 years", "6-12 years", "13-17 years", MISSING]
+AGE_GROUP_ORDER = ["0-4 years", "5-11 years", "12-17 years", MISSING]
 YES_NO_ORDER = ["Yes", "No", MISSING]
 GENDER_ORDER = ["Girls", "Boys", "Transgender", MISSING]
 TOP_N_OPTIONS = [5, 10, 15, 25]
+CHART_COLORS = ["#1d4ed8", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0891b2", "#be123c", "#4338ca"]
 
 ISSUE_COLUMNS = {
     "issue_new_arrival_lack_of_card": "New arrival / Lack of card",
@@ -63,222 +131,207 @@ SUPPORT_COLUMNS = {
     "support_none": "None",
 }
 
-def norm_text(value):
-    if pd.isna(value):
-        return ""
-    text = str(value).strip().lower()
-    text = re.sub(r"[\r\n\t]+", " ", text)
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
 STAFF_MAP = {
-    # Mohamed Sidi
-    "mohamed sidi": "Mohamed Sidi",
-    "mohamed": "Mohamed Sidi",
-
-    # Halima Amin
+    "mohamed sidi": "Mohamed Sidi", "mohamed": "Mohamed Sidi",
     "halima amin": "Halima Amin",
-
-    # Moge Garad
-    "moge garad": "Moge Garad",
-    "moge": "Moge Garad",
-    "more garad": "Moge Garad",
-
-    # Daud Hussein
+    "moge garad": "Moge Garad", "moge": "Moge Garad", "more garad": "Moge Garad",
     "daud hussein": "Daud Hussein",
-
-    # Maslah Mohamed Hassan
-    "maslah mohamed hassan": "Maslah Mohamed Hassan",
-    "maslah mohamed hasssan": "Maslah Mohamed Hassan",
-    "maslah mohamed": "Maslah Mohamed Hassan",
-    "maslsh mohamed hassan": "Maslah Mohamed Hassan",
-    "maslish mohamed": "Maslah Mohamed Hassan",
-    "maslah kohamed hassan": "Maslah Mohamed Hassan",
-    "maslah kohamed": "Maslah Mohamed Hassan",
-    "maslsh mohamed hasssan": "Maslah Mohamed Hassan",
-
-    # Ndayikeje Ferdinand
-    "ndayikeje ferdinand": "Ndayikeje Ferdinand",
-    "ferdinand ndayikeje": "Ndayikeje Ferdinand",
-    "ndayikeje": "Ndayikeje Ferdinand",
-    "ferdinand": "Ndayikeje Ferdinand",
-
-    # Teresia Natire Thomas
-    "teresia natire thomas": "Teresia Natire Thomas",
-    "teresia natire": "Teresia Natire Thomas",
-
-    # Haret Derow Ibrahim
-    "haret derow ibrahim": "Haret Derow Ibrahim",
-    "haret derow": "Haret Derow Ibrahim",
-    "hared derow": "Haret Derow Ibrahim",
-
-    # Beatrice Akwero
+    "maslah mohamed hassan": "Maslah Mohamed Hassan", "maslah mohamed hasssan": "Maslah Mohamed Hassan",
+    "maslah mohamed": "Maslah Mohamed Hassan", "maslsh mohamed hassan": "Maslah Mohamed Hassan",
+    "maslish mohamed": "Maslah Mohamed Hassan", "maslah kohamed hassan": "Maslah Mohamed Hassan",
+    "maslah kohamed": "Maslah Mohamed Hassan", "maslsh mohamed hasssan": "Maslah Mohamed Hassan",
+    "ndayikeje ferdinand": "Ndayikeje Ferdinand", "ferdinand ndayikeje": "Ndayikeje Ferdinand",
+    "ndayikeje": "Ndayikeje Ferdinand", "ferdinand": "Ndayikeje Ferdinand",
+    "teresia natire thomas": "Teresia Natire Thomas", "teresia natire": "Teresia Natire Thomas",
+    "haret derow ibrahim": "Haret Derow Ibrahim", "haret derow": "Haret Derow Ibrahim", "hared derow": "Haret Derow Ibrahim",
     "beatrice akwero": "Beatrice Akwero",
-
-    # David Otifo
-    "david otifo": "David Otifo",
-    "dave otifo": "David Otifo",
-
-    # Farah Mohamed Hussein
+    "david otifo": "David Otifo", "dave otifo": "David Otifo",
     "farah mohamed hussein": "Farah Mohamed Hussein",
-
-    # Musdaf Mohamed Hassan
-    "musdaf mohamed hassan": "Musdaf Mohamed Hassan",
-    "musdaf mohamed": "Musdaf Mohamed Hassan",
-
-    # Hirwa Gentille
-    "hirwa gentille": "Hirwa Gentille",
-    "hirwa": "Hirwa Gentille",
-
-    # Oliek Omot
-    "oliek omot": "Oliek Omot",
-
-    # Nelson Amanya
-    "nelson amanya": "Nelson Amanya",
-
-    # Dimo Justin
-    "dimo justin": "Dimo Justin",
-    "dimo": "Dimo Justin",
-
-    # Louis Kyanza
-    "louis kyanza": "Louis Kyanza",
-
-    # Dominic Nangiro Lomil
-    "dominic nangiro lomil": "Dominic Nangiro Lomil",
-    "dominic nangiro": "Dominic Nangiro Lomil",
-
-    # Leer Biel Leer
-    "leer biel leer": "Leer Biel Leer",
-
-    # Spora Niyikiza
-    "spora niyikiza": "Spora Niyikiza",
-    "niyikiza spora": "Spora Niyikiza",
-
-    # Jean Claude
-    "jean claude": "Jean Claude",
-
-    # Fowzia Omar
-    "fowzia omar": "Fowzia Omar",
-
-    # Yaak Akech
-    "yaak akech": "Yaak Akech",
-    "aketch yaak": "Yaak Akech",
-    "akech yaak": "Yaak Akech",
-
-    # Peter Kingombe
+    "musdaf mohamed hassan": "Musdaf Mohamed Hassan", "musdaf mohamed": "Musdaf Mohamed Hassan",
+    "hirwa gentille": "Hirwa Gentille", "hirwa": "Hirwa Gentille",
+    "oliek omot": "Oliek Omot", "nelson amanya": "Nelson Amanya",
+    "dimo justin": "Dimo Justin", "dimo": "Dimo Justin", "louis kyanza": "Louis Kyanza",
+    "dominic nangiro lomil": "Dominic Nangiro Lomil", "dominic nangiro": "Dominic Nangiro Lomil",
+    "leer biel leer": "Leer Biel Leer", "spora niyikiza": "Spora Niyikiza", "niyikiza spora": "Spora Niyikiza",
+    "jean claude": "Jean Claude", "fowzia omar": "Fowzia Omar",
+    "yaak akech": "Yaak Akech", "aketch yaak": "Yaak Akech", "akech yaak": "Yaak Akech",
     "peter kingombe": "Peter Kingombe",
-
-    # Dual Ador Arok
-    "dual ador arok": "Dual Ador Arok",
-    "dual ador": "Dual Ador Arok",
-    "ador arok dual": "Dual Ador Arok",
-
-    # Gatwech Bayak
-    "gatwech bayak": "Gatwech Bayak",
-    "gatwech": "Gatwech Bayak",
-
-    # Armele Ngakani
-    "armele ngakani": "Armele Ngakani",
-    "armele": "Armele Ngakani",
-
-    # John Wani
-    "john wani": "John Wani",
-
-    # Safari David
-    "safari david": "Safari David",
-    "safali": "Safari David",
-
-    # Epusie Brenda
-    "epusie brenda": "Epusie Brenda",
-
-    # Zahara Issack
-    "zahara issack": "Zahara Issack",
-    "zahara": "Zahara Issack",
-
-    # Nyakhor Buob Tang
-    "nyakhor buob": "Nyakhor Buob Tang",
-    "nyqkhor buob tang": "Nyakhor Buob Tang",
-    "nyakhor": "Nyakhor Buob Tang",
-
-    # Halimo Ahmed
-    "halimo ahmed": "Halimo Ahmed",
-    "halimo": "Halimo Ahmed",
-
-    # Agnes Ingiara
-    "agnes ingiara": "Agnes Ingiara",
-    "agnes ingiara oreste": "Agnes Ingiara",
-
-    # Oweteshe Mirindi
-    "oweteshe mirindi": "Oweteshe Mirindi",
-
-    # Rahmo Abdi
-    "rahmo abdi": "Rahmo Abdi",
-
-    # Ongoro John
-    "ongoro john": "Ongoro John",
-    "ongoro john tadeo": "Ongoro John",
-    "ongoro john tadeow": "Ongoro John",
-
-    # Abdikadir Osman
-    "abdikadir osman": "Abdikadir Osman",
-
-    # Salma Said
-    "salma said": "Salma Said",
-
-    # Abdiwakil Ali
-    "abdiwakil ali": "Abdiwakil Ali",
-
-    # Manow Muse
-    "manow muse": "Manow Muse",
-
-    # Jama Mohamed
-    "jama mohamed": "Jama Mohamed",
-
-    # Lobono Peter
-    "lobono peter": "Lobono Peter",
-    "peter lobono": "Lobono Peter",
-
-    # Lino Lotino
-    "lino lotino": "Lino Lotino",
-
-    # Magnifique Ndayisenga
-    "magnifique ndayisenga": "Magnifique Ndayisenga",
-    "ndayisenga magnifique": "Magnifique Ndayisenga",
-    "magnifique": "Magnifique Ndayisenga",
-
-    # Rose Akii
-    "rose akii": "Rose Akii",
-
-    # Adams Odwa Peter
-    "adams odwa peter": "Adams Odwa Peter",
-
-    # Lokiro Mazkil Napao
-    "lokiro mazkil napao": "Lokiro Mazkil Napao",
-    "lokiro mazkil": "Lokiro Mazkil Napao",
-
-    # Kwarto Oliha
-    "kwarto oliha": "Kwarto Oliha",
-
-    # Gabriella Amani
-    "gabriella amani": "Gabriella Amani",
-
-    # Nyok Jennifer
-    "nyok jennifer": "Nyok Jennifer",
-
-    # Ohide Akech Viola
+    "dual ador arok": "Dual Ador Arok", "dual ador": "Dual Ador Arok", "ador arok dual": "Dual Ador Arok",
+    "gatwech bayak": "Gatwech Bayak", "gatwech": "Gatwech Bayak",
+    "armele ngakani": "Armele Ngakani", "armele": "Armele Ngakani", "john wani": "John Wani",
+    "safari david": "Safari David", "safali": "Safari David", "epusie brenda": "Epusie Brenda",
+    "zahara issack": "Zahara Issack", "zahara": "Zahara Issack",
+    "nyakhor buob": "Nyakhor Buob Tang", "nyqkhor buob tang": "Nyakhor Buob Tang", "nyakhor": "Nyakhor Buob Tang",
+    "halimo ahmed": "Halimo Ahmed", "halimo": "Halimo Ahmed",
+    "agnes ingiara": "Agnes Ingiara", "agnes ingiara oreste": "Agnes Ingiara",
+    "oweteshe mirindi": "Oweteshe Mirindi", "rahmo abdi": "Rahmo Abdi",
+    "ongoro john": "Ongoro John", "ongoro john tadeo": "Ongoro John", "ongoro john tadeow": "Ongoro John",
+    "abdikadir osman": "Abdikadir Osman", "salma said": "Salma Said", "abdiwakil ali": "Abdiwakil Ali",
+    "manow muse": "Manow Muse", "jama mohamed": "Jama Mohamed",
+    "lobono peter": "Lobono Peter", "peter lobono": "Lobono Peter", "lino lotino": "Lino Lotino",
+    "magnifique ndayisenga": "Magnifique Ndayisenga", "ndayisenga magnifique": "Magnifique Ndayisenga", "magnifique": "Magnifique Ndayisenga",
+    "rose akii": "Rose Akii", "adams odwa peter": "Adams Odwa Peter",
+    "lokiro mazkil napao": "Lokiro Mazkil Napao", "lokiro mazkil": "Lokiro Mazkil Napao",
+    "kwarto oliha": "Kwarto Oliha", "gabriella amani": "Gabriella Amani", "nyok jennifer": "Nyok Jennifer",
     "ohide akech viola": "Ohide Akech Viola",
-
-    # Not a staff name
-    "21 04 2026": MISSING,
-    "kalobeyei reception centre": MISSING,
-    "kalobeyei reception center": MISSING,
+    "21 04 2026": MISSING, "kalobeyei reception centre": MISSING, "kalobeyei reception center": MISSING,
 }
+
+ISSUE_OTHER_MAP = {
+    # Documentation / registration / card issues
+    "lack of card": "New arrival / Lack of card",
+    "no card": "New arrival / Lack of card",
+    "new arrival": "New arrival / Lack of card",
+    "new arrivals": "New arrival / Lack of card",
+    "card separation": "New arrival / Lack of card",
+    "separation card": "New arrival / Lack of card",
+    "separated from card": "New arrival / Lack of card",
+    "registration": "Needs profiling / registration by UNHCR",
+    "profiling": "Needs profiling / registration by UNHCR",
+    "unhcr registration": "Needs profiling / registration by UNHCR",
+    "needs registration": "Needs profiling / registration by UNHCR",
+    "mandate": "Needs profiling / registration by UNHCR",
+    "documentation": "Needs profiling / registration by UNHCR",
+
+    # Disability / medical / basic-needs related
+    "disability": "Disability",
+    "disabled": "Disability",
+    "child with disability": "Disability",
+    "basic needs": "Basic needs",
+    "nfi": "Basic needs",
+    "nfis": "Basic needs",
+    "material support": "Basic needs",
+    "materials support": "Basic needs",
+    "medical": "Basic needs",
+    "medical concern": "Basic needs",
+    "health": "Basic needs",
+    "health issue": "Basic needs",
+    "sick": "Basic needs",
+
+    # Education
+    "education": "Education",
+    "school": "Education",
+    "school fees": "Education",
+    "school fee": "Education",
+    "scholastic materials": "Education",
+    "scholastic material": "Education",
+    "school materials": "Education",
+    "learning materials": "Education",
+    "uniform": "Education",
+    "books": "Education",
+
+    # Food, clothing, shelter
+    "food": "Food",
+    "food assistance": "Food",
+    "food issue": "Food",
+    "bamba chakula": "Food",
+    "bamba chakula issues": "Food",
+    "alternative food collector": "Food",
+    "ration": "Food",
+    "clothing": "Clothing",
+    "clothes": "Clothing",
+    "shelter": "Shelter",
+    "house": "Shelter",
+    "housing": "Shelter",
+    "tent": "Shelter",
+
+    # Family / care arrangement
+    "deceased parent": "Deceased parent",
+    "orphan": "Deceased parent",
+    "dead parent": "Deceased parent",
+    "parents separated": "Parents separated",
+    "parent separated": "Parents separated",
+    "separated parents": "Parents separated",
+    "family separation": "Parents separated",
+    "unaccompanied": "Parents separated",
+    "separated child": "Parents separated",
+    "neglected": "Neglected",
+    "neglect": "Neglected",
+    "abandoned": "Neglected",
+    "child out of wedlock": "Child out of wedlock",
+    "out of wedlock": "Child out of wedlock",
+
+    # Psychosocial / child engagement activities recorded as issue-other
+    "pss": "Psychosocial support",
+    "psychosocial": "Psychosocial support",
+    "psychosocial support": "Psychosocial support",
+    "counselling": "Psychosocial support",
+    "counseling": "Psychosocial support",
+    "stress": "Psychosocial support",
+    "trauma": "Psychosocial support",
+    "playing": "Psychosocial support",
+    "playing with the kids": "Psychosocial support",
+    "playing with other children": "Psychosocial support",
+    "playing colouring book": "Psychosocial support",
+    "playing and reading story book": "Psychosocial support",
+    "take5": "Psychosocial support",
+    "take 5": "Psychosocial support",
+    "take5 training": "Psychosocial support",
+    "take 5 training": "Psychosocial support",
+    "take5 routine": "Psychosocial support",
+    "take 5 routine": "Psychosocial support",
+    "psychoeducation": "Psychosocial support",
+    "psycho education": "Psychosocial support",
+
+    # Protection concerns
+    "protection": "Reporting a protection concern",
+    "protection concern": "Reporting a protection concern",
+    "reporting protection concern": "Reporting a protection concern",
+    "abuse": "Reporting a protection concern",
+    "child abuse": "Reporting a protection concern",
+    "physical assault": "Reporting a protection concern",
+    "assault": "Reporting a protection concern",
+    "violence": "Reporting a protection concern",
+    "gbv": "Reporting a protection concern",
+    "gbv survivor": "Reporting a protection concern",
+    "defilement": "Reporting a protection concern",
+    "rape": "Reporting a protection concern",
+    "abduction": "Reporting a protection concern",
+    "threat of abduction": "Reporting a protection concern",
+    "threat": "Reporting a protection concern",
+    "child labour": "Reporting a protection concern",
+    "child labor": "Reporting a protection concern",
+    "early marriage": "Reporting a protection concern",
+    "forced marriage": "Reporting a protection concern",
+
+    # None / review noise
+    "none": "None",
+    "no issue": "None",
+    "no issues": "None",
+    "nil": "None",
+    "n a": "None",
+    "na": "None",
+    "pl": REVIEW,
+    "o00": REVIEW,
+    "000": REVIEW,
+}
+
+CORE_ISSUE_VALUES = sorted(set(ISSUE_COLUMNS.values()))
+
+ISSUE_KEYWORD_RULES = [
+    (r"\b(new arrival|lack.*card|no card|card separation|separation card)\b", "New arrival / Lack of card"),
+    (r"\b(profile|profiling|registration|register|unhcr|documentation|mandate)\b", "Needs profiling / registration by UNHCR"),
+    (r"\b(disab|impair|special need)\b", "Disability"),
+    (r"\b(basic need|nfi|material support|medical|health|sick|medicine|clinic|hospital)\b", "Basic needs"),
+    (r"\b(school|education|scholastic|learning|uniform|book|fees?)\b", "Education"),
+    (r"\b(food|bamba|chakula|ration|alternative food collector)\b", "Food"),
+    (r"\b(cloth|clothes|clothing|shoe)\b", "Clothing"),
+    (r"\b(shelter|house|housing|tent|accommodation)\b", "Shelter"),
+    (r"\b(deceased|dead parent|orphan)\b", "Deceased parent"),
+    (r"\b(parent.*separat|separat.*parent|family separation|unaccompanied|separated child)\b", "Parents separated"),
+    (r"\b(neglect|abandon)\b", "Neglected"),
+    (r"\b(out of wedlock|wedlock)\b", "Child out of wedlock"),
+    (r"\b(pss|psychosocial|counsel|trauma|stress|play|playing|take\s*5|take5|psychoeducation)\b", "Psychosocial support"),
+    (r"\b(protection|abuse|assault|violence|gbv|defile|rape|abduction|threat|labou?r|marriage|exploitation)\b", "Reporting a protection concern"),
+]
 
 LOCATION_MAP = {
     "hagadera camp": "Hagadera",
     "hagadera": "Hagadera",
     "ifo 1": "Ifo 1",
+    "ifo one": "Ifo 1",
     "ifo 2": "Ifo 2",
+    "ifo two": "Ifo 2",
     "dagahaley": "Dagahaley",
     "kalobeyei reception center": "Kalobeyei Reception Centre",
     "kalobeyei reception centre": "Kalobeyei Reception Centre",
@@ -292,71 +345,61 @@ CFS_MAP = {
     "kalobeyei reception center cfs": "Kalobeyei Reception Centre CFS",
     "kalobeyei reception centre cfs": "Kalobeyei Reception Centre CFS",
     "host community": "Host Community CFS",
+    "host community cfs": "Host Community CFS",
     "ifo 2 mobile cfs": "Ifo 2 Mobile CFS",
     "ifo mobile cfs 1": "Ifo Mobile CFS 1",
 }
 
 GAME_MAP = {
-    "take5": "Take 5",
-    "take 5": "Take 5",
-    "take5 training": "Take 5",
-    "take 5 training": "Take 5",
-    "take5 routine": "Take 5",
-    "take 5 routine": "Take 5",
-    "ismf": "I Support My Friend",
-    "imsf": "I Support My Friend",
-    "i support my friend": "I Support My Friend",
-    "psycho education": "Psychoeducation",
-    "psychoeducation": "Psychoeducation",
-    "merry go round": "Merry-go-round",
-    "see saw": "See-saw",
-    "slider": "Slider",
-    "see saw and slider": "See-saw / Slider",
-    "see saw and sliders": "See-saw / Slider",
-    "modelling": "Modelling clay",
-    "modelling clay": "Modelling clay",
-    "meddling clay": "Modelling clay",
-    "book reading": "Story / book reading",
-    "reading story books": "Story / book reading",
-    "story telling": "Story / book reading",
-    "playing": "Free play",
+    "take5": "Take 5", "take 5": "Take 5", "take five": "Take 5",
+    "take5 training": "Take 5", "take 5 training": "Take 5", "take5 routine": "Take 5", "take 5 routine": "Take 5",
+    "ismf": "I Support My Friend", "imsf": "I Support My Friend", "i support my friend": "I Support My Friend", "support my friend": "I Support My Friend",
+    "psycho education": "Psychoeducation", "psychoeducation": "Psychoeducation", "psycho-education": "Psychoeducation", "pss": "Psychoeducation",
+    "merry go round": "Merry-go-round", "merry-go-round": "Merry-go-round", "round about": "Merry-go-round",
+    "see saw": "See-saw", "seesaw": "See-saw", "see-saw": "See-saw",
+    "slider": "Slider", "slide": "Slider", "sliding": "Slider",
+    "see saw and slider": "See-saw / Slider", "see saw and sliders": "See-saw / Slider", "slide and see saw": "See-saw / Slider",
+    "modelling": "Modelling clay", "modeling": "Modelling clay", "modelling clay": "Modelling clay", "modeling clay": "Modelling clay", "meddling clay": "Modelling clay",
+    "drawing": "Drawing / colouring", "colouring": "Drawing / colouring", "coloring": "Drawing / colouring", "painting": "Drawing / colouring", "crayons": "Drawing / colouring",
+    "book reading": "Story / book reading", "reading story books": "Story / book reading", "story telling": "Story / book reading", "storytelling": "Story / book reading", "reading": "Story / book reading", "story book": "Story / book reading",
+    "football": "Football", "foot ball": "Football", "soccer": "Football",
+    "skipping": "Skipping rope", "skipping rope": "Skipping rope", "rope skipping": "Skipping rope",
+    "singing": "Singing / music", "songs": "Singing / music", "music": "Singing / music",
+    "dancing": "Dancing", "dance": "Dancing",
+    "running": "Running games", "running game": "Running games", "racing": "Running games",
+    "hide and seek": "Hide and seek", "hide seek": "Hide and seek",
+    "playing": "Play / unspecified activity", "play": "Play / unspecified activity", "free play": "Play / unspecified activity", "indoor games": "Play / unspecified activity", "outdoor games": "Play / unspecified activity", "toys": "Play / unspecified activity",
+    "none": "None", "no game": "None", "no games": "None", "nil": "None", "na": "None",
 }
 
-ISSUE_OTHER_MAP = {
-    "playing": "Play / child engagement",
-    "playing with the kids": "Play / child engagement",
-    "playing with other children": "Play / child engagement",
-    "playing colouring book": "Play / child engagement",
-    "playing and reading story book": "Play / child engagement",
-    "take5": "Take 5",
-    "take 5": "Take 5",
-    "take5 training": "Take 5",
-    "take 5 training": "Take 5",
-    "take5 routine": "Take 5",
-    "take 5 routine": "Take 5",
-    "scholastic materials": "Scholastic materials",
-    "materials support": "Scholastic materials",
-    "card separation": "Card separation",
-    "separation card": "Card separation",
-    "abduction": "Threat / abduction",
-    "threat of abduction": "Threat / abduction",
-    "gbv": "GBV",
-    "gbv survivor": "GBV",
-    "defilement": "GBV",
-    "physical assault": "Protection concern",
-    "medical": "Medical concern",
-    "medical concern": "Medical concern",
-    "basic needs": "Basic needs",
-    "bamba chakula issues": "Food assistance issue",
-    "alternative food collector": "Food assistance issue",
-    "pl": "Unclear / needs review",
-    "o00": "Unclear / needs review",
+GAME_KEYWORD_RULES = [
+    (r"\btake\s*5\b|\btake5\b|\btake five\b", "Take 5"),
+    (r"\b(i support my friend|support my friend|ismf|imsf)\b", "I Support My Friend"),
+    (r"\b(psycho\s*education|psychoeducation|pss)\b", "Psychoeducation"),
+    (r"\bmerry\s*-?\s*go\s*-?\s*round\b|\bround about\b", "Merry-go-round"),
+    (r"\bsee\s*-?\s*saw\b|\bseesaw\b", "See-saw"),
+    (r"\bslider?\b|\bsliding\b", "Slider"),
+    (r"\bfootball\b|\bfoot ball\b|\bsoccer\b", "Football"),
+    (r"\bskipping\b|\brope skipping\b", "Skipping rope"),
+    (r"\bmodelling\b|\bmodeling\b|\bclay\b", "Modelling clay"),
+    (r"\bdrawing\b|\bcolou?r\w*\b|\bpainting\b|\bcrayon", "Drawing / colouring"),
+    (r"\bread\w*\b|\bstory\b|\bbook", "Story / book reading"),
+    (r"\bsing\w*\b|\bsongs?\b|\bmusic\b", "Singing / music"),
+    (r"\bdanc\w*\b", "Dancing"),
+    (r"\brunn?ing\b|\brace\b|\bracing\b", "Running games"),
+    (r"\bhide\s*(and)?\s*seek\b", "Hide and seek"),
+    (r"\bplay\w*\b|\btoys?\b|\bgames?\b", "Play / unspecified activity"),
+]
+
+GAME_PLACEHOLDERS = {
+    "other", "others", "other option", "other specify", "specify other", "if other specify",
+    "other please specify", "please specify", "specify", "other games", "other game",
+    "game other specify", "games other specify", "game_other_specify", "games_played other",
 }
 
 AGENCY_MAP = {
     "dras": "DRS",
     "drs": "DRS",
-    "dr s": "DRS",
     "dra": "DRS",
     "unhcr": "UNHCR",
     "uhcr": "UNHCR",
@@ -364,17 +407,9 @@ AGENCY_MAP = {
     "un": "UNHCR",
     "unhcr and dras": "UNHCR / DRS",
     "dras and unhcr": "UNHCR / DRS",
-    "dras and unchr": "UNHCR / DRS",
-    "unhcr dras": "UNHCR / DRS",
-    "dras unhcr": "UNHCR / DRS",
-    "lwf and dras": "LWF / DRS",
-    "lwf and drs": "LWF / DRS",
-    "dras and lwf": "DRS / LWF",
-    "drs and lwf": "DRS / LWF",
     "lwf": "LWF",
     "lwfl": "LWF",
     "lwf education": "LWF",
-    "lwf education sector": "LWF",
     "hi": "HI",
     "wfp": "WFP",
     "pwj": "PWJ",
@@ -383,74 +418,127 @@ AGENCY_MAP = {
     "drc": "DRC",
     "rck": "RCK",
     "krcs": "KRCS",
-    "police and krcs": "Police / KRCS",
     "save the children": "Save the Children",
     "save children": "Save the Children",
-    "primary": "LWF",
     "000": "Unknown",
     "n": "Unknown",
 }
 
-def build_lookup(mapping: dict) -> dict:
-    lookup = {}
-    for raw_key, canonical in mapping.items():
-        normalized = norm_text(raw_key)
-        if normalized:
-            lookup[normalized] = canonical
-    return lookup
+UPPER_TOKENS = frozenset({"cfs", "tdh", "unhcr", "drs", "dras", "lwf", "hi", "wfp", "nrc", "drc", "rck", "krcs", "pss", "gbv"})
+LOWER_TOKENS = frozenset({"and", "or", "of", "the", "for", "to", "in", "by", "with", "at"})
 
-# --- Pre-built normalized lookups (built once at startup) ---
-STAFF_LOOKUP        = None  # populated after norm_text is defined; see below
-LOCATION_LOOKUP     = None
-CFS_LOOKUP          = None
-GAME_LOOKUP         = None
-ISSUE_OTHER_LOOKUP  = None
-AGENCY_LOOKUP       = None
+# -----------------------------------------------------------------------------
+# Core helpers
+# -----------------------------------------------------------------------------
+def resolve_data_path() -> Path:
+    if os.environ.get("CFS_DATA_PATH"):
+        return Path(os.environ["CFS_DATA_PATH"])
+    return DEFAULT_DATA_PATH
 
-# Build all lookups once at module load
-STAFF_LOOKUP       = build_lookup(STAFF_MAP)
-LOCATION_LOOKUP    = build_lookup(LOCATION_MAP)
-CFS_LOOKUP         = build_lookup(CFS_MAP)
-GAME_LOOKUP        = build_lookup(GAME_MAP)
-ISSUE_OTHER_LOOKUP = build_lookup(ISSUE_OTHER_MAP)
-AGENCY_LOOKUP      = build_lookup(AGENCY_MAP)
 
-def smart_title(value):
+def load_external_css(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        css = path.read_text(encoding="utf-8")
+        if css.strip():
+            st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    except Exception as exc:  # pragma: no cover - visual fallback only
+        st.caption(f"Custom CSS could not be loaded: {exc}")
+
+
+def image_to_data_uri(path: Path) -> str:
+    """Return a base64 data URI for a local image, or an empty string if absent."""
+    if not path.exists():
+        return ""
+    suffix = path.suffix.lower().lstrip(".") or "png"
+    mime = "jpeg" if suffix in {"jpg", "jpeg"} else suffix
+    try:
+        encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+        return f"data:image/{mime};base64,{encoded}"
+    except Exception:
+        return ""
+
+
+def render_app_footer() -> None:
+    logo_uri = image_to_data_uri(DEVELOPER_LOGO_PATH)
+    logo_html = f'<img src="{logo_uri}" alt="ImpactLens Africa logo" />' if logo_uri else '<div class="developer-logo-fallback">ILA</div>'
+    st.markdown(
+        f"""
+        <div class="app-footer">
+            <div class="footer-brand">
+                <div class="footer-logo">{logo_html}</div>
+                <div>
+                    <div class="footer-name">ImpactLens Africa</div>
+                    <div class="footer-tagline">Turning Data Into Human Impact</div>
+                </div>
+            </div>
+            <div class="footer-meta">
+                <div>Developed by <strong>John Kul</strong>, MEAL Officer-Tdh</div>
+                <div>{APP_VERSION}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def norm_text(value) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).strip().lower()
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def smart_title(value) -> str:
     if pd.isna(value) or str(value).strip() == "":
         return MISSING
     text = re.sub(r"\s+", " ", str(value).strip())
-    upper_tokens = {"cfs", "tdh", "unhcr", "drs", "dras", "lwf", "hi", "wfp", "nrc", "drc", "rck", "krcs", "pss", "gbv"}
-    lower_tokens = {"and", "or", "of", "the", "for", "to", "in", "by", "with", "at"}
-    titled = []
+    parts = []
     for token in text.split():
         key = token.lower()
-        if key in upper_tokens:
-            titled.append("DRS" if key == "dras" else token.upper())
-        elif key in lower_tokens:
-            titled.append(key)
+        if key in UPPER_TOKENS:
+            parts.append("DRS" if key == "dras" else token.upper())
+        elif key in LOWER_TOKENS:
+            parts.append(key)
         else:
-            titled.append(token.capitalize())
-    return " ".join(titled)
+            parts.append(token.capitalize())
+    return " ".join(parts)
 
 
-def yes_no(value):
+def build_lookup(mapping: dict) -> dict:
+    return {norm_text(k): v for k, v in mapping.items() if norm_text(k)}
+
+
+STAFF_LOOKUP = build_lookup(STAFF_MAP)
+LOCATION_LOOKUP = build_lookup(LOCATION_MAP)
+CFS_LOOKUP = build_lookup(CFS_MAP)
+GAME_LOOKUP = build_lookup(GAME_MAP)
+ISSUE_OTHER_LOOKUP = build_lookup(ISSUE_OTHER_MAP)
+AGENCY_LOOKUP = build_lookup(AGENCY_MAP)
+
+
+def yes_no(value) -> str:
     if pd.isna(value):
         return MISSING
-    numeric_value = pd.to_numeric(value, errors="coerce")
-    if pd.notna(numeric_value):
-        if numeric_value == 1:
-            return "Yes"
-        if numeric_value == 0:
-            return "No"
+    num = pd.to_numeric(value, errors="coerce")
+    if pd.notna(num):
+        return "Yes" if float(num) == 1 else "No" if float(num) == 0 else MISSING
     key = norm_text(value)
-    if key in {"yes", "y", "1", "true"}:
+    if key in {"yes", "y", "1", "true", "consented", "given"}:
         return "Yes"
-    if key in {"no", "n", "0", "false"}:
+    if key in {"no", "n", "0", "false", "not consented", "refused"}:
         return "No"
     return MISSING
 
 
-def clean_gender(value):
+def is_yes(value) -> bool:
+    return yes_no(value) == "Yes"
+
+
+def clean_gender(value) -> str:
     key = norm_text(value)
     if not key:
         return MISSING
@@ -458,92 +546,106 @@ def clean_gender(value):
         return "Girls"
     if key in {"boy", "boys", "male", "m"}:
         return "Boys"
-    if key in {
-        "transgender",
-        "trans gender",
-        "trans",
-        "tg",
-        "other",
-        "others",
-        "other gender",
-        "other specify",
-        "others specify",
-        "specify other",
-        "trans boy",
-        "trans girl",
-        "trans male",
-        "trans female",
-    }:
+    if key in {"transgender", "trans gender", "trans", "tg", "other", "others", "trans boy", "trans girl", "trans male", "trans female"}:
         return "Transgender"
     return MISSING
 
 
-def is_yes(value):
-    return yes_no(value) == "Yes"
-
-
-def harmonize_from_map(value, mapping, fallback_title=True):
-    key = norm_text(value)
-    if not key:
-        return MISSING
-    if key in mapping:
-        return mapping[key]
-    return smart_title(value) if fallback_title else value
-
-
-def build_lookup(mapping: dict) -> dict:
-    lookup = {}
-    for raw_key, canonical in mapping.items():
-        normalized = norm_text(raw_key)
-        if normalized:
-            lookup[normalized] = canonical
-    return lookup
-
-def fuzzy_harmonize(value, lookup: dict, canonical_values=None, cutoff=0.86, fallback_title=True):
-    key = norm_text(value)
-    if not key:
-        return MISSING
-    if key in lookup:                          # O(1) — returns here for most rows
-        return lookup[key]
-    candidates = canonical_values or sorted(set(lookup.values()))
-    best_score = 0.0
-    best_match = None
-    for candidate in candidates:
-        score = SequenceMatcher(None, key, norm_text(candidate)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = candidate
-    if best_match and best_score >= cutoff:
-        return best_match
-    return smart_title(value) if fallback_title else value
-
-def harmonize_from_map(value, lookup: dict, fallback_title=True) -> str:
+def fuzzy_harmonize(value, lookup: dict, cutoff: float = 0.86, fallback_title: bool = True) -> str:
     key = norm_text(value)
     if not key:
         return MISSING
     if key in lookup:
         return lookup[key]
-    return smart_title(value) if fallback_title else value
+    candidates = sorted(set(lookup.values()))
+    best_score, best_match = 0.0, None
+    for candidate in candidates:
+        score = SequenceMatcher(None, key, norm_text(candidate)).ratio()
+        if score > best_score:
+            best_score, best_match = score, candidate
+    if best_match and best_score >= cutoff:
+        return best_match
+    return smart_title(value) if fallback_title else str(value)
 
 
-def shorten_disability_type(value):
+def clean_staff(value) -> str:
+    return fuzzy_harmonize(value, STAFF_LOOKUP, cutoff=0.88)
+
+
+def clean_issue_other(value) -> str:
+    """Map free-text issue-other responses back to the main core issue list.
+
+    This prevents many small spelling/phrase variants from appearing as separate
+    issues in the Nature of Issues Reported table.
+    """
     key = norm_text(value)
     if not key:
         return MISSING
-    if "downsyndrome" in key or "down syndrome" in key:
-        return "Down syndrome"
-    if "neurological" in key or "adhd" in key or "autism" in key or "dyslexia" in key:
-        return "Neurological impairments"
-    if "chronic" in key or "diabetes" in key or "blood pressure" in key:
-        return "Chronic illnesses"
-    return smart_title(value)
+
+    if key in ISSUE_OTHER_LOOKUP:
+        return ISSUE_OTHER_LOOKUP[key]
+
+    for pattern, label in ISSUE_KEYWORD_RULES:
+        if re.search(pattern, key):
+            return label
+
+    # Fuzzy match against both manually mapped variants and the official core issue labels.
+    candidates = sorted(set(ISSUE_OTHER_LOOKUP.values()) | set(CORE_ISSUE_VALUES))
+    best_score, best_match = 0.0, None
+    for candidate in candidates:
+        if candidate == REVIEW:
+            continue
+        score = SequenceMatcher(None, key, norm_text(candidate)).ratio()
+        if score > best_score:
+            best_score, best_match = score, candidate
+
+    if best_match and best_score >= 0.72:
+        return best_match
+
+    # Last-resort: keep unknown protection-related free text under the core protection bucket
+    # instead of creating one-off hanging issue categories.
+    return "Reporting a protection concern"
 
 
-def clean_referral_destination(value):
+def first_available(row: pd.Series, columns: Iterable[str]):
+    for col in columns:
+        if col in row.index:
+            val = row.get(col)
+            if pd.notna(val) and str(val).strip():
+                return val
+    return None
+
+
+def extract_numeric_age(value):
+    if pd.isna(value):
+        return None
+    num = pd.to_numeric(value, errors="coerce")
+    if pd.notna(num):
+        return float(num)
+    m = re.search(r"(\d+)\D+(\d+)", str(value))
+    if m:
+        return (int(m.group(1)) + int(m.group(2))) / 2
+    return None
+
+
+def age_group(value) -> str:
+    age = extract_numeric_age(value)
+    if age is None:
+        return MISSING
+    if 0 <= age <= 4:
+        return "0-4 years"
+    if 5 <= age <= 11:
+        return "5-11 years"
+    if 12 <= age <= 17:
+        return "12-17 years"
+    return MISSING
+
+
+def clean_referral_destination(value) -> str:
     key = norm_text(value)
     if not key:
         return MISSING
-    if key == "pss":
+    if key == "pss" or "psychosocial" in key:
         return "PSS"
     if "case" in key:
         return "Case Management"
@@ -554,109 +656,238 @@ def clean_referral_destination(value):
     return smart_title(value)
 
 
-def age_group(age):
-    if pd.isna(age):
+def clean_disability_type(value) -> str:
+    key = norm_text(value)
+    if not key:
         return MISSING
-    try:
-        age = float(age)
-    except Exception:
+    if "down" in key and "syndrome" in key:
+        return "Down syndrome"
+    if any(word in key for word in ["neurological", "adhd", "autism", "dyslexia"]):
+        return "Neurological impairments"
+    if any(word in key for word in ["chronic", "diabetes", "blood pressure"]):
+        return "Chronic illnesses"
+    return smart_title(value)
+
+
+def is_game_placeholder(value) -> bool:
+    return norm_text(value) in GAME_PLACEHOLDERS
+
+
+def clean_game_label(value) -> str:
+    key = norm_text(value)
+    if not key:
         return MISSING
-    if 0 <= age <= 5:
-        return "0-5 years"
-    if 6 <= age <= 12:
-        return "6-12 years"
-    if 13 <= age <= 17:
-        return "13-17 years"
-    return MISSING
+    # "Other Option" is not an activity. It is only a trigger telling us to use
+    # game_other_specify, so it must never appear as its own row in the table.
+    if key in GAME_PLACEHOLDERS:
+        return MISSING
+    if key in GAME_LOOKUP:
+        return GAME_LOOKUP[key]
+    for pattern, label in GAME_KEYWORD_RULES:
+        if re.search(pattern, key):
+            return label
+    harmonized = fuzzy_harmonize(value, GAME_LOOKUP, cutoff=0.78)
+    return MISSING if norm_text(harmonized) in GAME_PLACEHOLDERS else harmonized
 
 
-def choose_first_nonmissing(row, columns):
-    for col in columns:
-        value = row.get(col, None)
-        if pd.notna(value) and str(value).strip() != "":
-            return value
-    return None
+def extract_game_labels(*values) -> Set[str]:
+    labels: Set[str] = set()
+    real_values = [v for v in values if pd.notna(v) and not is_game_placeholder(v)]
+    combined = " ".join(str(v) for v in real_values)
+    key_full = norm_text(combined)
+    if not key_full:
+        return labels
+    if re.search(r"\bsee\s*-?\s*saw\b|\bseesaw\b", key_full) and re.search(r"\bslider?\b|\bsliding\b", key_full):
+        labels.add("See-saw / Slider")
+    for pattern, label in GAME_KEYWORD_RULES:
+        if re.search(pattern, key_full):
+            labels.add(label)
+    for value in real_values:
+        for part in split_multi_response_text(value):
+            label = clean_game_label(part)
+            if label not in {MISSING, REVIEW, "None"}:
+                labels.add(label)
+    if "See-saw" in labels and "Slider" in labels:
+        labels.discard("See-saw"); labels.discard("Slider"); labels.add("See-saw / Slider")
+    labels.discard("None")
+    labels.discard("Other Option")
+    labels.discard("Other")
+    return labels
 
 
-def combine_location(row):
-    if str(row.get("settlement_clean", "")).lower().startswith("kalobeyei"):
-        return choose_first_nonmissing(row, ["camp_location_alt", "specific_camp_location", "exact_registered_location"])
-    return choose_first_nonmissing(row, ["specific_camp_location", "camp_location_alt", "exact_registered_location"])
+def clean_game(row: pd.Series) -> str:
+    labels = extract_game_labels(row.get("games_played", None), row.get("game_other_specify", None))
+    return "; ".join(sorted(labels)) if labels else MISSING
 
 
-def combine_cfs(row):
-    return choose_first_nonmissing(row, ["child_friendly_space_visited", "cfs_visited"])
+def file_slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", str(value)).strip("_").lower()
+    return slug[:90] or "dashboard_export"
 
 
-def is_take5_text(*values):
-    for value in values:
-        key = norm_text(value)
-        if not key:
-            continue
-        if re.search(r"(^|\s)take\s+5($|\s|[a-z])", key):
-            return True
-        if re.search(r"(^|\s)take5($|\s|[a-z])", key):
-            return True
-    return False
+def df_signature(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "empty"
+    safe = df.astype(str).fillna("")
+    meta = f"{safe.shape}|{'|'.join(safe.columns)}".encode("utf-8", errors="ignore")
+    hashes = pd.util.hash_pandas_object(safe, index=True).values.tobytes()
+    return hashlib.md5(meta + hashes).hexdigest()[:12]
 
-
-def clean_game(row):
-    raw = row.get("games_played", None)
-    other = row.get("game_other_specify", None)
-    raw_key = norm_text(raw)
-    other_key = norm_text(other)
-    if is_take5_text(raw, other):
-        return "Take 5"
-    if raw_key in {"", "other", "others", "specify other"} and norm_text(other):
-        return fuzzy_harmonize(other, GAME_LOOKUP, cutoff=0.84)
-    if norm_text(raw):
-        return fuzzy_harmonize(raw, GAME_LOOKUP, cutoff=0.84)
-    if norm_text(other):
-        return fuzzy_harmonize(other, GAME_LOOKUP, cutoff=0.84)
-    return MISSING
-
-
-def clean_staff(value):
-    return fuzzy_harmonize(value, STAFF_LOOKUP, cutoff=0.88)
-
-
-def clean_issue_other(value):
-    if is_take5_text(value):
-        return "Take 5"
-    return fuzzy_harmonize(value, ISSUE_OTHER_LOOKUP, cutoff=0.84)
-
-
-def ordered_unique(series, order=None):
-    values = [v for v in series.dropna().unique().tolist() if str(v).strip() != ""]
-    values = [v for v in values if v != MISSING] + ([MISSING] if MISSING in values else [])
-    if order:
-        order_map = {v: i for i, v in enumerate(order)}
-        return sorted(values, key=lambda v: (order_map.get(v, 999), str(v)))
-    return sorted(values, key=lambda v: str(v))
-
-
+# -----------------------------------------------------------------------------
+# Data loading and preparation
+# -----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=300)
-def load_and_prepare(modified_time):
-    if PREPARED_DATA_PATH.exists():
-        try:
-            payload = pd.read_pickle(PREPARED_DATA_PATH)
-            if payload.get("cache_version") == CACHE_VERSION:
-                return (
-                    payload["df"],
-                    payload["issue_long"],
-                    payload["support_long"],
-                    payload["game_long"],
-                )
-        except Exception:
-            pass
+def read_file_cached(path: str, modified_time: float) -> pd.DataFrame:
+    p = Path(path)
+    if p.suffix.lower() in {".xlsx", ".xls"}:
+        return pd.read_excel(p)
+    return pd.read_csv(p)
 
-    df = pd.read_excel(DATA_PATH)
-    df = df.copy()
+
+
+def harmonize_input_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename raw survey columns to the transformed names used by the dashboard."""
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+    stripped_map = {str(k).strip(): v for k, v in RAW_TO_TRANSFORMED_COLUMNS.items()}
+    rename_map = {}
+    for col in out.columns:
+        target = stripped_map.get(str(col).strip())
+        if target and target not in out.columns:
+            rename_map[col] = target
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    return out
+
+
+def ensure_column(df: pd.DataFrame, column: str, default=None) -> None:
+    """Create a missing expected column so preparation does not fail."""
+    if column not in df.columns:
+        df[column] = default
+
+
+def split_multi_response_text(value) -> List[str]:
+    if pd.isna(value) or str(value).strip() == "":
+        return []
+    text = str(value)
+    # Keep slash inside known labels by first normalizing common XLSForm separators.
+    parts = re.split(r"[;|\n\r]+|,(?=\s*[A-Za-z])", text)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+ISSUE_TEXT_ALIASES = {
+    "new arrival lack of card": "New arrival / Lack of card",
+    "new arrival": "New arrival / Lack of card",
+    "lack of card": "New arrival / Lack of card",
+    "persons in need of profiling registration by unhcr": "Needs profiling / registration by UNHCR",
+    "person in need of profiling registration by unhcr": "Needs profiling / registration by UNHCR",
+    "need profiling registration unhcr": "Needs profiling / registration by UNHCR",
+    "parents seperated": "Parents separated",
+    "parents separated": "Parents separated",
+    "psychosocial support": "Psychosocial support",
+    "reporting a protection concern": "Reporting a protection concern",
+}
+
+
+def extract_issue_labels_from_text(value) -> Set[str]:
+    labels: Set[str] = set()
+    key_full = norm_text(value)
+    if not key_full:
+        return labels
+
+    # Whole-cell alias and keyword checks first, because some exports keep multi-selects in one cell.
+    for alias, label in ISSUE_TEXT_ALIASES.items():
+        if alias in key_full:
+            labels.add(label)
+    for label in CORE_ISSUE_VALUES:
+        if norm_text(label) in key_full:
+            labels.add(label)
+    for pattern, label in ISSUE_KEYWORD_RULES:
+        if re.search(pattern, key_full):
+            labels.add(label)
+
+    # Then process individual separated tokens.
+    for part in split_multi_response_text(value):
+        cleaned = clean_issue_other(part)
+        if cleaned not in {MISSING, REVIEW}:
+            labels.add(cleaned)
+    return labels
+
+
+SUPPORT_TEXT_ALIASES = {
+    "psychological first aid": "Psychological First Aid",
+    "pfa": "Psychological First Aid",
+    "play and art therapy": "Play and art therapy",
+    "play art therapy": "Play and art therapy",
+    "art therapy": "Play and art therapy",
+    "psychoeducation": "Psychoeducation",
+    "psycho education": "Psychoeducation",
+    "none": "None",
+}
+
+
+def extract_support_labels_from_text(value) -> Set[str]:
+    labels: Set[str] = set()
+    key_full = norm_text(value)
+    if not key_full:
+        return labels
+    for alias, label in SUPPORT_TEXT_ALIASES.items():
+        if alias in key_full:
+            labels.add(label)
+    for part in split_multi_response_text(value):
+        key = norm_text(part)
+        if key in SUPPORT_TEXT_ALIASES:
+            labels.add(SUPPORT_TEXT_ALIASES[key])
+    return labels
+
+
+def disability_type_source(row: pd.Series):
+    dtype = row.get("disability_type", None)
+    other = row.get("disability_type_other", None)
+    if norm_text(dtype) in {"other", "others", "specify other"} and norm_text(other):
+        return other
+    return dtype if norm_text(dtype) else other
+
+
+def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    df = harmonize_input_columns(raw_df)
     df.insert(0, "record_id", range(1, len(df) + 1))
+
+    expected_defaults = {
+        "date": pd.NaT,
+        "consent": "Yes",
+        "staff_filling_form": MISSING,
+        "child_gender": MISSING,
+        "child_age": None,
+        "child_living_with_disability": MISSING,
+        "disability_type": None,
+        "disability_type_other": None,
+        "first_visit_tdh_cfs": MISSING,
+        "referral_made": MISSING,
+        "referral_destination": None,
+        "external_referral_agency": None,
+        "camp_of_information_seeking": None,
+        "specific_camp_location": None,
+        "camp_location_alt": None,
+        "exact_registered_location": None,
+        "child_friendly_space_visited": None,
+        "cfs_visited": None,
+        "games_played": None,
+        "game_other_specify": None,
+        "issue_other": None,
+        "issue_other_specify": None,
+        "nature_issues_reported_text": None,
+        "support_offered_text": None,
+        "child_name": None,
+    }
+    for col, default in expected_defaults.items():
+        ensure_column(df, col, default)
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["month"] = df["date"].dt.to_period("M").astype("string")
     df["consent_clean"] = df["consent"].map(yes_no)
+    df = df[df["consent_clean"] == "Yes"].copy()
+
     df["staff_clean"] = df["staff_filling_form"].map(clean_staff)
     df["gender_clean"] = df["child_gender"].map(clean_gender)
     df["disability_status_clean"] = df["child_living_with_disability"].map(yes_no)
@@ -664,71 +895,135 @@ def load_and_prepare(modified_time):
     df["referral_made_clean"] = df["referral_made"].map(yes_no)
     df["referral_destination_grouped"] = df["referral_destination"].map(clean_referral_destination)
     df["external_referral_agency_clean"] = df["external_referral_agency"].map(lambda v: fuzzy_harmonize(v, AGENCY_LOOKUP, cutoff=0.86))
+    df["age_clean"] = df["child_age"].map(extract_numeric_age)
+    df["age_group"] = df["child_age"].map(age_group)
+    df["disability_type_source"] = df.apply(disability_type_source, axis=1)
+    df["disability_type_display"] = df["disability_type_source"].map(clean_disability_type)
+    df.loc[df["disability_status_clean"].astype(str) != "Yes", "disability_type_display"] = MISSING
 
-    df["age_clean"] = pd.to_numeric(df["child_age"], errors="coerce")
-    df["age_group"] = df["age_clean"].map(age_group)
-    df["age_group"] = pd.Categorical(df["age_group"], categories=AGE_GROUP_ORDER, ordered=True)
-    df["gender_clean"] = pd.Categorical(df["gender_clean"], categories=GENDER_ORDER, ordered=True)
-    df["first_visit_clean"] = pd.Categorical(df["first_visit_clean"], categories=YES_NO_ORDER, ordered=True)
-    df["disability_status_clean"] = pd.Categorical(df["disability_status_clean"], categories=YES_NO_ORDER, ordered=True)
-    df["referral_made_clean"] = pd.Categorical(df["referral_made_clean"], categories=YES_NO_ORDER, ordered=True)
-
-    df["disability_type_clean"] = df["disability_type"].map(lambda v: harmonize_from_map(v, {}, fallback_title=True))
-    df["disability_type_display"] = df["disability_type"].map(shorten_disability_type)
-    df.loc[df["disability_status_clean"].astype("string") != "Yes", "disability_type_display"] = MISSING
-
-    df["settlement_clean"] = df["camp_of_information_seeking"].map(lambda v: harmonize_from_map(v, {}, fallback_title=True))
-    df["location_raw"] = df.apply(combine_location, axis=1)
+    df["settlement_clean"] = df["camp_of_information_seeking"].map(smart_title)
+    df["location_raw"] = df.apply(lambda r: first_available(r, ["camp_location_alt", "specific_camp_location", "exact_registered_location"]), axis=1)
     df["location_clean"] = df["location_raw"].map(lambda v: fuzzy_harmonize(v, LOCATION_LOOKUP, cutoff=0.86))
-    df["cfs_raw"] = df.apply(combine_cfs, axis=1)
+    df["cfs_raw"] = df.apply(lambda r: first_available(r, ["child_friendly_space_visited", "cfs_visited"]), axis=1)
     df["cfs_clean"] = df["cfs_raw"].map(lambda v: fuzzy_harmonize(v, CFS_LOOKUP, cutoff=0.86))
     df["games_played_clean"] = df.apply(clean_game, axis=1)
-    df["issue_other_specify_clean"] = df["issue_other_specify"].map(clean_issue_other)
+
+    for col, order in [
+        ("age_group", AGE_GROUP_ORDER),
+        ("gender_clean", GENDER_ORDER),
+        ("first_visit_clean", YES_NO_ORDER),
+        ("disability_status_clean", YES_NO_ORDER),
+        ("referral_made_clean", YES_NO_ORDER),
+        ("consent_clean", YES_NO_ORDER),
+    ]:
+        df[col] = pd.Categorical(df[col].astype(str), categories=order, ordered=True)
 
     issue_frames = []
     for col, label in ISSUE_COLUMNS.items():
         if col in df.columns:
-            mask = df[col].map(is_yes)
-            tmp = df.loc[mask, ["record_id"]].copy()
+            tmp = df.loc[df[col].map(is_yes), ["record_id"]].copy()
             tmp["issue_clean"] = label
             issue_frames.append(tmp)
-    if "issue_other" in df.columns and "issue_other_specify_clean" in df.columns:
-        mask = df["issue_other"].map(is_yes) & ~df["issue_other_specify_clean"].isin([MISSING, REVIEW])
-        tmp = df.loc[mask, ["record_id", "issue_other_specify_clean"]].copy()
-        tmp = tmp.rename(columns={"issue_other_specify_clean": "issue_clean"})
-        issue_frames.append(tmp)
-    issue_long = pd.concat(issue_frames, ignore_index=True) if issue_frames else pd.DataFrame(columns=["record_id", "issue_clean"])
-    issue_long = issue_long.drop_duplicates(["record_id", "issue_clean"]).reset_index(drop=True)
+    if "issue_other" in df.columns and "issue_other_specify" in df.columns:
+        mask = df["issue_other"].map(is_yes) & df["issue_other_specify"].notna()
+        tmp = df.loc[mask, ["record_id", "issue_other_specify"]].copy()
+        tmp["issue_clean"] = tmp["issue_other_specify"].map(clean_issue_other)
+        tmp = tmp[~tmp["issue_clean"].isin([MISSING, REVIEW])]
+        issue_frames.append(tmp[["record_id", "issue_clean"]])
+    if "nature_issues_reported_text" in df.columns:
+        text_rows = []
+        for record_id, value in df[["record_id", "nature_issues_reported_text"]].itertuples(index=False):
+            for label in extract_issue_labels_from_text(value):
+                if label not in {MISSING, REVIEW}:
+                    text_rows.append({"record_id": record_id, "issue_clean": label})
+        if text_rows:
+            issue_frames.append(pd.DataFrame(text_rows))
+    issue_long = pd.concat(issue_frames, ignore_index=True).drop_duplicates() if issue_frames else pd.DataFrame(columns=["record_id", "issue_clean"])
 
     support_frames = []
     for col, label in SUPPORT_COLUMNS.items():
         if col in df.columns:
-            mask = df[col].map(is_yes)
-            tmp = df.loc[mask, ["record_id"]].copy()
+            tmp = df.loc[df[col].map(is_yes), ["record_id"]].copy()
             tmp["support_clean"] = label
             support_frames.append(tmp)
-    support_long = pd.concat(support_frames, ignore_index=True) if support_frames else pd.DataFrame(columns=["record_id", "support_clean"])
-    support_long = support_long.drop_duplicates(["record_id", "support_clean"]).reset_index(drop=True)
+    if "support_offered_text" in df.columns:
+        text_rows = []
+        for record_id, value in df[["record_id", "support_offered_text"]].itertuples(index=False):
+            for label in extract_support_labels_from_text(value):
+                if label not in {MISSING, REVIEW}:
+                    text_rows.append({"record_id": record_id, "support_clean": label})
+        if text_rows:
+            support_frames.append(pd.DataFrame(text_rows))
+    support_long = pd.concat(support_frames, ignore_index=True).drop_duplicates() if support_frames else pd.DataFrame(columns=["record_id", "support_clean"])
 
-    game_long = (
-        df.loc[~df["games_played_clean"].isin([MISSING, REVIEW]), ["record_id", "games_played_clean"]]
-        .rename(columns={"games_played_clean": "game_clean"})
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
+    game_rows = []
+    for record_id, raw_game, other_game in df[["record_id", "games_played", "game_other_specify"]].itertuples(index=False):
+        for label in extract_game_labels(raw_game, other_game):
+            if label not in {MISSING, REVIEW, "None"}:
+                game_rows.append({"record_id": record_id, "game_clean": label})
+    game_long = pd.DataFrame(game_rows).drop_duplicates().reset_index(drop=True) if game_rows else pd.DataFrame(columns=["record_id", "game_clean"])
 
     issues_combined = issue_long.groupby("record_id")["issue_clean"].apply(lambda x: "; ".join(sorted(set(x)))).rename("issues_combined")
     support_combined = support_long.groupby("record_id")["support_clean"].apply(lambda x: "; ".join(sorted(set(x)))).rename("support_combined")
-    df = df.merge(issues_combined, on="record_id", how="left").merge(support_combined, on="record_id", how="left")
+    games_combined = game_long.groupby("record_id")["game_clean"].apply(lambda x: "; ".join(sorted(set(x)))).rename("games_combined")
+    df = df.merge(issues_combined, on="record_id", how="left").merge(support_combined, on="record_id", how="left").merge(games_combined, on="record_id", how="left")
     df["issues_combined"] = df["issues_combined"].fillna(MISSING)
     df["support_combined"] = df["support_combined"].fillna(MISSING)
+    df["games_combined"] = df["games_combined"].fillna(MISSING)
+
+    return df, issue_long, support_long, game_long
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Read and prepare the dataset in one cached step keyed by file modified time.
+
+    Performance strategy:
+    1. Use a persisted prepared-data pickle where possible. This avoids reading
+       and re-harmonising the Excel file after app/server restarts.
+    2. Use Streamlit cache for fast in-session reruns when users change filters
+       or dashboard sections.
+    3. Invalidate automatically when the source file modified time changes.
+    """
+    source_path = str(Path(path).resolve())
+
+    try:
+        if PREPARED_CACHE_PATH.exists():
+            payload = pd.read_pickle(PREPARED_CACHE_PATH)
+            if (
+                payload.get("cache_version") == PREPARED_CACHE_VERSION
+                and payload.get("source_path") == source_path
+                and payload.get("modified_time") == modified_time
+            ):
+                return (
+                    int(payload.get("raw_count", len(payload["df"]))),
+                    payload["df"],
+                    payload["issue_long"],
+                    payload["support_long"],
+                    payload["game_long"],
+                )
+    except Exception:
+        try:
+            PREPARED_CACHE_PATH.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    p = Path(path)
+    if p.suffix.lower() in {".xlsx", ".xls"}:
+        raw_df = pd.read_excel(p)
+    else:
+        raw_df = pd.read_csv(p)
+
+    raw_count = int(len(raw_df))
+    df, issue_long, support_long, game_long = prepare_data(raw_df)
 
     try:
         pd.to_pickle(
             {
-                "cache_version": CACHE_VERSION,
-                "source_path": str(DATA_PATH),
+                "cache_version": PREPARED_CACHE_VERSION,
+                "source_path": source_path,
                 "modified_time": modified_time,
+                "raw_count": raw_count,
                 "df": df,
                 "issue_long": issue_long,
                 "support_long": support_long,
@@ -739,738 +1034,580 @@ def load_and_prepare(modified_time):
     except Exception:
         pass
 
-    return df, issue_long, support_long, game_long
+    return raw_count, df, issue_long, support_long, game_long
+
+# -----------------------------------------------------------------------------
+# Table and chart utilities
+# -----------------------------------------------------------------------------
+def ordered_unique(series: pd.Series, order: Optional[List] = None) -> list:
+    values = [v for v in series.dropna().astype(str).unique().tolist() if str(v).strip()]
+    # Missing/unspecified is intentionally excluded from user-facing dashboard filters.
+    # Consent-refused forms are removed, and blank skipped fields should not drive analysis views.
+    values = [v for v in values if v != MISSING]
+    if order:
+        order_map = {str(v): i for i, v in enumerate(order)}
+        return sorted(values, key=lambda v: (order_map.get(str(v), 999), str(v)))
+    return sorted(values, key=lambda v: str(v))
 
 
-def table_with_total(data, index, columns=None, value_col="record_id"):
+def remove_missing_dimension_values(data: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+    """Remove Missing/unspecified values from analytical dimensions.
+
+    Missing values are still counted in the Data Quality section, but they are
+    not shown as categories in dashboard analysis tables/charts.
+    """
     if data.empty:
-        return pd.DataFrame()
-    columns = columns or []
-    grouped = data.groupby(index + columns, observed=False)[value_col].count()
-    if columns:
-        table = grouped.unstack(columns, fill_value=0)
+        return data
+    out = data.copy()
+    for col in columns:
+        if col in out.columns:
+            out = out[out[col].notna()]
+            out = out[out[col].astype(str).str.strip().ne("")]
+            out = out[out[col].astype(str).ne(MISSING)]
+            out = out[out[col].astype(str).ne(REVIEW)]
+    return out
+
+
+def drop_empty_missing_axes(table: pd.DataFrame) -> pd.DataFrame:
+    """Safety net to remove zero-total Missing/unspecified rows/columns."""
+    if table.empty:
+        return table
+    out = table.copy()
+
+    def label_has_missing(label) -> bool:
+        if isinstance(label, tuple):
+            return any(str(x) == MISSING for x in label)
+        return str(label) == MISSING
+
+    keep_rows = []
+    for idx, row in out.iterrows():
+        numeric_sum = pd.to_numeric(row, errors="coerce").fillna(0).sum()
+        keep_rows.append(not label_has_missing(idx) and numeric_sum > 0)
+    out = out.loc[keep_rows]
+
+    keep_cols = []
+    for col in out.columns:
+        numeric_sum = pd.to_numeric(out[col], errors="coerce").fillna(0).sum()
+        keep_cols.append(not label_has_missing(col) and numeric_sum > 0)
+    out = out.loc[:, keep_cols]
+    return out
+
+
+def count_table(data: pd.DataFrame, columns: List[str], order_col: Optional[str] = None) -> pd.DataFrame:
+    if data.empty or not all(c in data.columns for c in columns):
+        return pd.DataFrame(columns=columns + ["Count"])
+    clean = remove_missing_dimension_values(data, columns)
+    if clean.empty:
+        return pd.DataFrame(columns=columns + ["Count"])
+    out = clean.groupby(columns, observed=True).size().reset_index(name="Count")
+    out = out[out["Count"] > 0]
+    if order_col and order_col in out.columns:
+        if order_col == "age_group":
+            out[order_col] = pd.Categorical(out[order_col].astype(str), categories=[v for v in AGE_GROUP_ORDER if v != MISSING], ordered=True)
+        out = out.sort_values([order_col, "Count"], ascending=[True, False])
     else:
-        table = grouped.to_frame("Count")
+        out = out.sort_values("Count", ascending=False)
+    return out.reset_index(drop=True)
+
+
+def multi_response_tables(long_data: pd.DataFrame, value_col: str, label: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Show both unique records and total mentions for multi-response fields.
+
+    The main issue/activity tables count mentions. These supporting tables now
+    show the same language by including a Total mentions column, while also
+    showing how many unique records/children produced those mentions.
+    """
+    dist_cols = ["Selection count", "Records", "Total mentions"]
+    combo_cols = [f"{label} combination", "Records", "Total mentions"]
+    if long_data.empty or value_col not in long_data.columns or "record_id" not in long_data.columns:
+        return pd.DataFrame(columns=dist_cols), pd.DataFrame(columns=combo_cols)
+
+    # Use the same analytical exclusions as the main by-gender tables so totals reconcile.
+    required_cols = [value_col] + (["gender_clean"] if "gender_clean" in long_data.columns else [])
+    analytical = remove_missing_dimension_values(long_data, required_cols)
+    cleaned = analytical[["record_id", value_col]].dropna().drop_duplicates().copy()
+    cleaned = cleaned[~cleaned[value_col].astype(str).isin([MISSING, REVIEW, "None"])]
+    if cleaned.empty:
+        return pd.DataFrame(columns=dist_cols), pd.DataFrame(columns=combo_cols)
+
+    per_record = cleaned.groupby("record_id", observed=True)[value_col].agg(lambda vals: sorted(set(str(v) for v in vals if str(v).strip())))
+    selection_counts = per_record.map(len)
+    total_records = int(selection_counts.shape[0])
+    total_mentions = int(selection_counts.sum())
+
+    dist = selection_counts.value_counts().sort_index().rename_axis("selection_number").reset_index(name="Records")
+    dist["Total mentions"] = dist["selection_number"].astype(int) * dist["Records"].astype(int)
+    dist["Selection count"] = dist["selection_number"].map(lambda c: "1 selection" if int(c) == 1 else f"{int(c)} selections")
+    dist = dist[["Selection count", "Records", "Total mentions"]]
+    total_row = pd.DataFrame([{"Selection count": "Grand Total", "Records": total_records, "Total mentions": total_mentions}])
+    dist = pd.concat([dist, total_row], ignore_index=True)
+
+    combo_rows = []
+    for values in per_record:
+        combo = " + ".join(values)
+        combo_rows.append({f"{label} combination": combo, "Selection number": len(values)})
+    combo_src = pd.DataFrame(combo_rows)
+    combos = combo_src.groupby([f"{label} combination", "Selection number"], observed=True).size().reset_index(name="Records")
+    combos["Total mentions"] = combos["Selection number"].astype(int) * combos["Records"].astype(int)
+    combos = combos.drop(columns=["Selection number"]).sort_values(["Records", "Total mentions"], ascending=False).head(30).reset_index(drop=True)
+    combo_total = pd.DataFrame([{f"{label} combination": "Grand Total", "Records": total_records, "Total mentions": total_mentions}])
+    combos = pd.concat([combos, combo_total], ignore_index=True)
+    return dist, combos
+
+
+def table_with_total(data: pd.DataFrame, index: List[str], columns: Optional[List[str]] = None, value_col: str = "record_id") -> pd.DataFrame:
+    if data.empty or not all(c in data.columns for c in index):
+        return pd.DataFrame()
+    group_cols = index + (columns or [])
+    if not all(c in data.columns for c in group_cols):
+        return pd.DataFrame()
+
+    clean = remove_missing_dimension_values(data, group_cols)
+    if clean.empty:
+        return pd.DataFrame()
+
+    grouped = clean.groupby(group_cols, observed=True)[value_col].count()
+    table = grouped.unstack(columns, fill_value=0) if columns else grouped.to_frame("Count")
+    if len(index) == 1:
+        table.index.name = index[0]
+    table = drop_empty_missing_axes(table)
+    if table.empty:
+        return table
+
     if isinstance(table.columns, pd.MultiIndex):
         table[("Total",) + ("",) * (table.columns.nlevels - 1)] = table.sum(axis=1)
+        total_col = ("Total",) + ("",) * (table.columns.nlevels - 1)
     elif "Count" in table.columns and len(table.columns) == 1:
-        table = drop_zero_missing_table_labels(table)
-        if index == ["age_group"]:
-            table = table.sort_index()
-        else:
-            table = table.sort_values("Count", ascending=False)
-        table.loc["Grand Total", "Count"] = table["Count"].sum()
-        return table
+        total_col = "Count"
     else:
         table["Total"] = table.sum(axis=1)
-    total_col = ("Total",) + ("",) * (table.columns.nlevels - 1) if isinstance(table.columns, pd.MultiIndex) else "Total"
-    table = drop_zero_missing_table_labels(table)
-    if "age_group" in index:
-        table = table.sort_index()
-    else:
-        table = table.sort_values(total_col, ascending=False)
+        total_col = "Total"
+    table = table.sort_values(total_col, ascending=False)
     table.loc["Grand Total"] = table.sum(numeric_only=True)
     return table
 
 
-def add_interview_date_columns(table, data, group_col, date_col):
-    if table.empty or data.empty or group_col not in data.columns or date_col not in data.columns:
-        return table
+FRIENDLY_COLUMN_NAMES = {
+    "settlement_clean": "Camp / Settlement",
+    "location_clean": "Specific Location",
+    "cfs_clean": "CFS / Site",
+    "staff_clean": "Staff / CPV",
+    "gender_clean": "Gender",
+    "age_group": "Age Group",
+    "issue_clean": "Issue",
+    "support_clean": "Support Type",
+    "game_clean": "Game / Activity",
+    "visit_type": "Visit Type",
+    "first_visit_clean": "First Visit",
+    "disability_status_clean": "Disability Status",
+    "disability_type_display": "Type of Disability",
+    "referral_destination_grouped": "Referral Destination",
+    "external_referral_agency_clean": "External Referral Agency",
+    "month_label": "Month",
+}
 
-    out = table.copy()
-    date_summary = data.dropna(subset=[date_col]).groupby(group_col, observed=False)[date_col].agg(["min", "max"])
 
-    def fmt_date(value):
-        if pd.isna(value):
-            return ""
-        return pd.to_datetime(value).strftime("%d %b %Y")
+def friendly_column_label(name: Optional[str], title: str = "") -> str:
+    """Return a user-facing label; never return the generic word Category."""
+    raw = "" if name is None else str(name).strip()
+    if raw in FRIENDLY_COLUMN_NAMES:
+        return FRIENDLY_COLUMN_NAMES[raw]
+    if raw and raw.lower() not in {"category", "index", "none"}:
+        # If the label is already presentation-friendly, keep its capitalization
+        # e.g. "Staff / CPV" should not become "Staff / Cpv".
+        if any(ch.isupper() for ch in raw) or "/" in raw:
+            return raw.replace("_", " ")
+        return raw.replace("_", " ").title()
 
-    first_dates = {}
-    latest_dates = {}
-    for row_label in out.index:
-        if str(row_label) == "Grand Total":
-            first_dates[row_label] = fmt_date(data[date_col].min())
-            latest_dates[row_label] = fmt_date(data[date_col].max())
-        elif row_label in date_summary.index:
-            first_dates[row_label] = fmt_date(date_summary.loc[row_label, "min"])
-            latest_dates[row_label] = fmt_date(date_summary.loc[row_label, "max"])
+    t = title.lower()
+    if "camp" in t:
+        return "Camp / Settlement"
+    if "cfs" in t or "site" in t:
+        return "CFS / Site"
+    if "staff" in t or "cpv" in t:
+        return "Staff / CPV"
+    if "age" in t:
+        return "Age Group"
+    if "gender" in t:
+        return "Gender"
+    if "issue" in t:
+        return "Issue"
+    if "support" in t:
+        return "Support Type"
+    if "game" in t or "activit" in t:
+        return "Game / Activity"
+    if "disability" in t:
+        return "Type of Disability"
+    if "referral" in t and "agency" in t:
+        return "External Referral Agency"
+    if "referral" in t:
+        return "Referral Destination"
+    return "Item"
+
+
+def add_display_numbering(display: pd.DataFrame, label_col: Optional[str] = None) -> pd.DataFrame:
+    """Insert a separate 1-based No. column.
+
+    Row labels remain in their own descriptive column; numbering is no longer
+    joined to the row value.
+    """
+    out = display.copy().reset_index(drop=True)
+    serials = []
+    n = 1
+    for _, row in out.iterrows():
+        is_total = any(str(v) == "Grand Total" for v in row.values)
+        if is_total:
+            serials.append("")
         else:
-            first_dates[row_label] = ""
-            latest_dates[row_label] = ""
-
-    if isinstance(out.columns, pd.MultiIndex):
-        suffix = ("",) * (out.columns.nlevels - 1)
-        out[("First Date of Interview",) + suffix] = pd.Series(first_dates)
-        out[("Latest Interview Date",) + suffix] = pd.Series(latest_dates)
-    else:
-        out["First Date of Interview"] = pd.Series(first_dates)
-        out["Latest Interview Date"] = pd.Series(latest_dates)
+            serials.append(n)
+            n += 1
+    out.insert(0, "No.", serials)
     return out
 
 
-def label_has_missing(label):
-    if isinstance(label, tuple):
-        return any(str(part) == MISSING for part in label)
-    return str(label) == MISSING
-
-
-def numeric_sum(values):
-    return pd.to_numeric(values, errors="coerce").fillna(0).sum()
-
-
-def drop_zero_missing_table_labels(table):
-    if table.empty:
-        return table
-
-    keep_rows = []
-    for row_label, row in table.iterrows():
-        drop_row = label_has_missing(row_label) and numeric_sum(row) == 0
-        keep_rows.append(not drop_row)
-    table = table.loc[keep_rows]
-
-    keep_cols = []
-    for col_label in table.columns:
-        drop_col = label_has_missing(col_label) and numeric_sum(table[col_label]) == 0
-        keep_cols.append(not drop_col)
-    return table.loc[:, keep_cols]
-
-
-def style_total(table):
-    if table.empty:
-        return table
-
-    def row_style(row):
-        if str(row.name) == "Grand Total":
-            return ["font-weight: 800; background-color: #dbeafe; color: #0f172a;" for _ in row]
-        return ["" for _ in row]
-
-    styler = (
-        table.style
-        .apply(row_style, axis=1)
-        .format(precision=0, thousands=",")
-        .set_table_styles(
-            [
-                {"selector": "th", "props": [("background-color", "#eaf2fb"), ("color", "#111827"), ("font-weight", "800"), ("padding", "9px 10px"), ("border", "1px solid #d5dee9")]},
-                {"selector": "td", "props": [("color", "#1f2937"), ("padding", "8px 10px"), ("border", "1px solid #e5edf5")]},
-                {"selector": "tbody tr:nth-child(even)", "props": [("background-color", "#f8fafc")]},
-            ]
-        )
-    )
-    return styler
-
-
-def count_table(data, columns, order_col=None):
-    if data.empty:
-        return pd.DataFrame(columns=columns + ["Count"])
-    out = data.groupby(columns, observed=False).size().reset_index(name="Count")
-    out = out[out["Count"] > 0]
-    if order_col == "age_group":
-        out[order_col] = pd.Categorical(out[order_col], categories=AGE_GROUP_ORDER, ordered=True)
-        out = out.sort_values([order_col, "Count"], ascending=[True, False])
-    else:
-        out = out.sort_values("Count", ascending=False)
-    return out
-
-
-def sort_chart_by_total(data, category_col, value_col="Count", keep_age_order=False, axis="x"):
-    if data.empty:
-        return data, []
-    if keep_age_order or category_col == "age_group":
-        order = [v for v in AGE_GROUP_ORDER if v in set(data[category_col].astype("string"))]
-        return data, order
-    ascending = axis == "y"
-    totals = (
-        data.groupby(category_col, observed=False)[value_col]
-        .sum()
-        .sort_values(ascending=ascending)
-    )
-    order = totals.index.astype("string").tolist()
-    return data, order
-
-
-def top_n_chart_control(data, category_col, key, label="Chart category slicer", default=10):
-    if data.empty or category_col not in data.columns:
-        return data
-    category_count = data[category_col].nunique(dropna=True)
-    if category_count <= min(TOP_N_OPTIONS):
-        return data
-    control_signature = dataframe_signature(data)
-    control_key = f"{key}_{control_signature}"
-    default_index = 0
-    mode = st.radio(
-        label,
-        ["Highest", "Lowest"],
-        index=0,
-        horizontal=False,
-        key=f"chart_rank_mode_{control_key}",
-        help="This limits the chart only. The table above remains complete.",
-    )
-    selected_n = st.radio(
-        "Number of categories",
-        TOP_N_OPTIONS,
-        index=default_index,
-        horizontal=False,
-        key=f"chart_top_n_{control_key}",
-    )
-    totals = data.groupby(category_col, observed=False)["Count"].sum().sort_values(ascending=(mode == "Lowest"))
-    keep = totals.head(selected_n).index
-    return data[data[category_col].isin(keep)].copy()
-
-
-def add_grand_total_row(df, label_col):
-    if df.empty:
-        return df
-    total = {c: "" for c in df.columns}
-    total[label_col] = "Grand Total"
-    total["Count"] = df["Count"].sum()
-    return pd.concat([df, pd.DataFrame([total])], ignore_index=True)
-
-
-def top_n_with_total(df, n, label_col):
-    if df.empty:
-        return df
-    total = {c: "" for c in df.columns}
-    total[label_col] = "Grand Total"
-    total["Count"] = df["Count"].sum()
-    return pd.concat([df.head(n), pd.DataFrame([total])], ignore_index=True)
-
-
-def style_simple_total(df):
-    if df.empty:
-        return df
-
-    def row_style(row):
-        if "Grand Total" in [str(x) for x in row.values]:
-            return ["font-weight: 800; background-color: #dbeafe; color: #0f172a;" for _ in row]
-        return ["" for _ in row]
-
-    return (
-        df.style
-        .apply(row_style, axis=1)
-        .format({"Count": "{:,.0f}"})
-        .set_table_styles(
-            [
-                {"selector": "th", "props": [("background-color", "#eaf2fb"), ("color", "#111827"), ("font-weight", "800"), ("padding", "9px 10px"), ("border", "1px solid #d5dee9")]},
-                {"selector": "td", "props": [("color", "#1f2937"), ("padding", "8px 10px"), ("border", "1px solid #e5edf5")]},
-                {"selector": "tbody tr:nth-child(even)", "props": [("background-color", "#f8fafc")]},
-            ]
-        )
-    )
-
-
-def file_slug(value):
-    value = re.sub(r"[^a-zA-Z0-9]+", "_", str(value)).strip("_").lower()
-    return value[:90] or "dashboard_export"
-
-
-def flatten_table_for_export(table):
+def flatten_table(table: pd.DataFrame, title: str = "") -> pd.DataFrame:
+    """Flatten tables for CSV export using clean 1-based row numbering."""
     flat = table.copy()
-    if isinstance(flat.index, pd.MultiIndex):
-        flat.index = [" | ".join(str(part) for part in idx if str(part) != "") for idx in flat.index]
+    row_label_col = None
+
     if isinstance(flat.columns, pd.MultiIndex):
-        flat.columns = [" | ".join(str(part) for part in col if str(part) != "") for col in flat.columns]
-    flat = flat.reset_index()
-    flat.columns = [str(col) if str(col) != "index" else "Category" for col in flat.columns]
-    return flat
+        flat.columns = [" | ".join(str(p) for p in col if str(p) != "") for col in flat.columns]
+    else:
+        flat.columns = [friendly_column_label(str(c), title) for c in flat.columns]
 
-
-def dataframe_signature(table):
-    if table.empty:
-        return "empty"
-    flat = flatten_table_for_export(table).astype("string").fillna("")
-    metadata = f"{flat.shape}|{'|'.join(flat.columns)}".encode("utf-8", errors="ignore")
-    hashed_values = pd.util.hash_pandas_object(flat, index=True).values.tobytes()
-    return hashlib.md5(metadata + hashed_values).hexdigest()[:12]
-
-
-def chart_signature(fig):
-    return hashlib.md5(fig.to_json().encode("utf-8", errors="ignore")).hexdigest()[:12]
-
-
-def dataframe_to_png_bytes(table, title):
-    try:
-        import matplotlib.pyplot as plt
-    except Exception:
-        return None, "Image export for tables requires matplotlib."
-    if table.empty:
-        return None, "No table data available to export."
-
-    flat = flatten_table_for_export(table)
-    row_count = len(flat)
-    col_count = len(flat.columns)
-    width = min(24, max(9, col_count * 1.45))
-    height = min(40, max(3.2, row_count * 0.34 + 1.7))
-
-    fig, ax = plt.subplots(figsize=(width, height))
-    ax.axis("off")
-    ax.set_title(title, fontsize=14, fontweight="bold", loc="left", pad=12)
-    table_artist = ax.table(
-        cellText=flat.astype(str).values,
-        colLabels=flat.columns,
-        loc="upper left",
-        cellLoc="left",
-        colLoc="left",
+    # Do not render an unnamed pandas integer index as a table column. After sorting,
+    # pandas often keeps original row numbers, but they are not analytical data.
+    default_range = (
+        isinstance(flat.index, pd.RangeIndex)
+        or (flat.index.name is None and not isinstance(flat.index, pd.MultiIndex))
     )
-    table_artist.auto_set_font_size(False)
-    table_artist.set_fontsize(8)
-    table_artist.scale(1, 1.25)
-    for (row, col), cell in table_artist.get_celld().items():
-        cell.set_edgecolor("#d5dee9")
-        if row == 0:
-            cell.set_facecolor("#eaf2fb")
-            cell.set_text_props(weight="bold", color="#111827")
-        elif any(str(value) == "Grand Total" for value in flat.iloc[row - 1].values):
-            cell.set_facecolor("#dbeafe")
-            cell.set_text_props(weight="bold", color="#0f172a")
-        elif row % 2 == 0:
-            cell.set_facecolor("#f8fafc")
+    if not default_range:
+        if isinstance(flat.index, pd.MultiIndex):
+            index_values = [" | ".join(str(p) for p in idx if str(p) != "") for idx in flat.index]
+            index_names = [friendly_column_label(str(n), title) for n in flat.index.names if n]
+            index_name = " | ".join(index_names) if index_names else friendly_column_label(None, title)
         else:
-            cell.set_facecolor("#ffffff")
-    buffer = BytesIO()
-    fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    buffer.seek(0)
-    return buffer.getvalue(), None
+            index_values = [str(v) for v in flat.index]
+            index_name = friendly_column_label(str(flat.index.name) if flat.index.name else None, title)
+        flat.insert(0, index_name, index_values)
+        row_label_col = index_name
+
+    return add_display_numbering(flat, label_col=row_label_col)
 
 
-def table_image_download(table, key, title):
+def table_display_frame(table: pd.DataFrame, title: str = "") -> pd.DataFrame:
+    """Convert any normal/MultiIndex dataframe into a clean display dataframe.
+
+    There is no separate generic Category column. For indexed summary tables,
+    the 1-based row number is merged into the descriptive row-label column.
+    """
+    display = table.copy()
+    row_label_col = None
+
+    if isinstance(display.columns, pd.MultiIndex):
+        display.columns = [" | ".join(str(p) for p in col if str(p) != "") for col in display.columns]
+    else:
+        display.columns = [friendly_column_label(str(c), title) for c in display.columns]
+
+    # Do not render an unnamed pandas integer index as a table column. After sorting,
+    # pandas often keeps original row numbers, but they are not analytical data.
+    default_range = (
+        isinstance(display.index, pd.RangeIndex)
+        or (display.index.name is None and not isinstance(display.index, pd.MultiIndex))
+    )
+    if not default_range:
+        if isinstance(display.index, pd.MultiIndex):
+            index_values = [" | ".join(str(p) for p in idx if str(p) != "") for idx in display.index]
+            index_names = [friendly_column_label(str(n), title) for n in display.index.names if n]
+            index_name = " | ".join(index_names) if index_names else friendly_column_label(None, title)
+        else:
+            index_values = [str(v) for v in display.index]
+            index_name = friendly_column_label(str(display.index.name) if display.index.name else None, title)
+        display.insert(0, index_name, index_values)
+        row_label_col = index_name
+
+    return add_display_numbering(display, label_col=row_label_col)
+
+
+def is_percentage_column(column_name: str) -> bool:
+    name = str(column_name).lower()
+    return "%" in name or "percent" in name or "percentage" in name or "rate" in name
+
+
+def format_table_value(value, column_name: str = "", precision: int = 0) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            number = float(value)
+            if is_percentage_column(column_name):
+                return f"{number:,.1f}"
+            return f"{number:,.0f}"
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def build_professional_table_html(table: pd.DataFrame, title: str, precision: int = 0) -> Tuple[str, int]:
+    """Build a self-contained, iframe-safe professional HTML table.
+
+    This avoids Streamlit's dataframe styling limitations and makes the table
+    look the same for all users in the deployed dashboard.
+    """
+    display = table_display_frame(table, title=title)
+    row_count, col_count = display.shape
+
+    numeric_cols = []
+    max_values = {}
+    for col in display.columns:
+        numeric = pd.to_numeric(display[col], errors="coerce")
+        if numeric.notna().sum() and not str(col).lower() in {"record_id", "id", "no.", "no", "#"}:
+            numeric_cols.append(col)
+            max_values[col] = max(float(numeric.max()), 0.0)
+
+    thead = "".join(f"<th>{html_lib.escape(str(col))}</th>" for col in display.columns)
+
+    body_rows = []
+    for i, row in display.iterrows():
+        row_values = [str(v) for v in row.values]
+        is_total = any(v == "Grand Total" for v in row_values)
+        row_class = "total-row" if is_total else ("even-row" if i % 2 else "odd-row")
+        cells = []
+        for j, col in enumerate(display.columns):
+            value = row[col]
+            value_text = html_lib.escape(format_table_value(value, column_name=str(col), precision=precision))
+            classes = []
+            style_parts = []
+
+            if j == 0:
+                classes.append("first-col")
+
+            if col in numeric_cols:
+                classes.append("num-cell")
+                numeric_value = pd.to_numeric(value, errors="coerce")
+
+            col_name = str(col).lower()
+            if "total" in col_name or "rate" in col_name or "%" in col_name:
+                classes.append("emphasis-col")
+
+            class_attr = f" class='{' '.join(classes)}'" if classes else ""
+            style_attr = f" style='{''.join(style_parts)}'" if style_parts else ""
+            cells.append(f"<td{class_attr}{style_attr}>{value_text}</td>")
+        body_rows.append(f"<tr class='{row_class}'>" + "".join(cells) + "</tr>")
+
+    tbody = "".join(body_rows)
+    height = min(820, max(360, 164 + min(row_count, 12) * 42))
+    scroll_height = max(220, height - 135)
+
+    html_doc = f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <style>
+        :root {{
+          --primary:#1d4ed8; --primary-dark:#172554; --border:#d9e2ef;
+          --soft:#f8fafc; --text:#0f172a; --muted:#64748b;
+        }}
+        * {{ box-sizing:border-box; }}
+        body {{ margin:0; background:transparent; font-family:Inter, Segoe UI, Roboto, Arial, sans-serif; color:var(--text); }}
+        .table-card {{
+          width:100%; background:#fff; border:1px solid var(--border); border-radius:16px;
+          box-shadow:0 12px 30px rgba(15,23,42,.08); overflow:hidden;
+        }}
+        .table-card-header {{
+          display:flex; justify-content:space-between; align-items:center; gap:1rem;
+          padding:1rem 1.15rem; background:linear-gradient(135deg,#fff 0%,#eff6ff 100%);
+          border-bottom:1px solid var(--border);
+        }}
+        .table-title {{ color:var(--primary-dark); font-size:1.05rem; font-weight:950; letter-spacing:-.02em; }}
+        .table-subtitle {{ margin-top:.2rem; color:var(--muted); font-size:.82rem; font-weight:650; }}
+        .table-scroll {{ max-height:{scroll_height}px; overflow:auto; background:#fff; }}
+        table {{ width:max-content; min-width:100%; table-layout:auto; border-collapse:separate; border-spacing:0; font-size:.86rem; line-height:1.35; }}
+        thead th {{
+          position:sticky; top:0; z-index:5; padding:11px 13px; text-align:left; white-space:nowrap;
+          color:#fff; font-weight:950; background:linear-gradient(180deg,#1e40af,#172554);
+          border-right:1px solid #1e3a8a; border-bottom:1px solid #1e3a8a;
+        }}
+        thead th:first-child {{ left:0; z-index:7; }}
+        tbody td {{
+          padding:10px 13px; border-right:1px solid #e5edf5; border-bottom:1px solid #e5edf5;
+          color:#1f2937; vertical-align:middle; background:#fff; white-space:nowrap;
+        }}
+        tbody tr.even-row td {{ background-color:#fbfdff; }}
+        tbody tr:hover td {{ background-color:#eff6ff !important; }}
+        tbody td.first-col {{
+          position:sticky; left:0; z-index:2; min-width:max-content;
+          color:#172554; font-weight:850; background:#f8fafc; box-shadow:1px 0 0 #e5edf5;
+        }}
+        tbody tr:hover td.first-col {{ background:#eaf2ff !important; }}
+        td.num-cell {{ text-align:right; font-variant-numeric:tabular-nums; font-weight:750; }}
+        td.emphasis-col {{ color:#172554; font-weight:900; }}
+        tr.total-row td {{
+          background:#eef2ff !important; color:#0f172a; font-weight:950;
+          border-top:2px solid #1d4ed8; border-bottom:2px solid #1d4ed8;
+        }}
+        tr.total-row td.first-col {{ background:#dbeafe !important; color:#172554; }}
+        @media (max-width:900px) {{
+          .table-card-header {{ flex-direction:column; align-items:flex-start; }}
+          table {{ min-width:100%; font-size:.82rem; }}
+          tbody td, thead th {{ padding:9px 11px; }}
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="table-card">
+        <div class="table-card-header">
+          <div>
+            <div class="table-title">{html_lib.escape(title)}</div>
+            <div class="table-subtitle">{row_count:,} rows · {col_count:,} columns · current filters applied</div>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr>{thead}</tr></thead>
+            <tbody>{tbody}</tbody>
+          </table>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return html_doc, height
+
+
+def render_table(table: pd.DataFrame, title: str, key: str, precision: int = 0) -> None:
     if table.empty:
+        st.info("No records available for this table.")
         return
-    current_signature = dataframe_signature(table)
-    scoped_key = f"{key}_{current_signature}"
-    image_key = f"table_png_{scoped_key}"
-    message_key = f"table_png_message_{scoped_key}"
-    st.markdown("<div class='export-row'>", unsafe_allow_html=True)
-    prep_col, download_col, csv_col = st.columns([1, 1, 1])
-    with prep_col:
-        if st.button("Generate table PNG", key=f"prepare_table_{scoped_key}", use_container_width=True):
-            image, message = dataframe_to_png_bytes(table, title)
-            st.session_state[image_key] = image
-            st.session_state[message_key] = message
-    with download_col:
-        if st.session_state.get(image_key):
-            st.download_button(
-                "Download table PNG",
-                data=st.session_state[image_key],
-                file_name=f"{file_slug(title)}.png",
-                mime="image/png",
-                key=f"download_table_{scoped_key}",
-                use_container_width=True,
-            )
-        else:
-            st.button("Download table PNG", key=f"download_table_placeholder_{scoped_key}", disabled=True, use_container_width=True)
-    with csv_col:
-        st.download_button(
-            "Download table CSV",
-            data=flatten_table_for_export(table).to_csv(index=False).encode("utf-8"),
-            file_name=f"{file_slug(title)}.csv",
-            mime="text/csv",
-            key=f"download_table_csv_{scoped_key}",
-            use_container_width=True,
-        )
-    if st.session_state.get(message_key):
-        st.caption(st.session_state[message_key])
-    st.markdown("</div>", unsafe_allow_html=True)
 
+    flat = flatten_table(table, title=title)
+    sig = df_signature(flat)
+    html_doc, height = build_professional_table_html(table, title=title, precision=precision)
+    components.html(html_doc, height=height, scrolling=False)
 
-def render_table(table, key, title, simple=False):
-    st.dataframe(style_simple_total(table) if simple else style_total(table), use_container_width=True)
-    table_image_download(table, key, title)
-
-
-def chart_image_download(fig, key, title):
-    current_signature = chart_signature(fig)
-    scoped_key = f"{key}_{current_signature}"
-    image_key = f"chart_png_{scoped_key}"
-    message_key = f"chart_png_message_{scoped_key}"
-    st.markdown("<div class='export-row'>", unsafe_allow_html=True)
-    prep_col, download_col = st.columns([1, 1])
-    with prep_col:
-        if st.button("Generate chart PNG", key=f"prepare_chart_{scoped_key}", use_container_width=True):
-            try:
-                st.session_state[image_key] = fig.to_image(format="png", scale=2)
-                st.session_state[message_key] = None
-            except Exception:
-                st.session_state[image_key] = None
-                st.session_state[message_key] = "Chart image export requires the kaleido package in the Streamlit environment."
-    with download_col:
-        if st.session_state.get(image_key):
-            st.download_button(
-                "Download chart PNG",
-                data=st.session_state[image_key],
-                file_name=f"{file_slug(title)}.png",
-                mime="image/png",
-                key=f"download_chart_{scoped_key}",
-                use_container_width=True,
-            )
-        else:
-            st.button("Download chart PNG", key=f"download_chart_placeholder_{scoped_key}", disabled=True, use_container_width=True)
-    if st.session_state.get(message_key):
-        st.caption(st.session_state[message_key])
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def multi_response_tables(long_data, value_col, label):
-    if long_data.empty or value_col not in long_data.columns:
-        empty_distribution = pd.DataFrame(columns=["Selection count", "Count"])
-        empty_combinations = pd.DataFrame(columns=[f"{label} combination", "Count"])
-        return empty_distribution, empty_combinations
-
-    cleaned = (
-        long_data[["record_id", value_col]]
-        .dropna()
-        .drop_duplicates()
-        .copy()
+    st.download_button(
+        "⬇ Download table as CSV",
+        data=flat.to_csv(index=False).encode("utf-8"),
+        file_name=f"{file_slug(title)}.csv",
+        mime="text/csv",
+        key=f"download_{key}_{sig}",
+        use_container_width=True,
     )
-    cleaned = cleaned[~cleaned[value_col].astype("string").isin([MISSING, REVIEW])]
-    if cleaned.empty:
-        empty_distribution = pd.DataFrame(columns=["Selection count", "Count"])
-        empty_combinations = pd.DataFrame(columns=[f"{label} combination", "Count"])
-        return empty_distribution, empty_combinations
-
-    per_record = cleaned.groupby("record_id", observed=False)[value_col].agg(
-        lambda values: sorted(set(str(value) for value in values if str(value).strip()))
-    )
-    selection_counts = per_record.map(len)
-    distribution = (
-        selection_counts.value_counts()
-        .sort_index()
-        .rename_axis("Selection count")
-        .reset_index(name="Count")
-    )
-    distribution["Selection count"] = distribution["Selection count"].map(
-        lambda count: "1 selection" if count == 1 else f"{count} selections"
-    )
-    distribution = add_grand_total_row(distribution, "Selection count")
-
-    combinations = (
-        per_record.map(lambda values: " + ".join(values))
-        .value_counts()
-        .rename_axis(f"{label} combination")
-        .reset_index(name="Count")
-        .sort_values("Count", ascending=False)
-    )
-    combinations = top_n_with_total(combinations, 30, f"{label} combination")
-    return distribution, combinations
 
 
-def bar_chart(data, x, y, color=None, title="", horizontal=False, height=420, category_orders=None):
+def add_top_n_control(data: pd.DataFrame, category_col: str, key: str, default: int = 10) -> pd.DataFrame:
+    if data.empty or category_col not in data.columns or data[category_col].nunique(dropna=True) <= min(TOP_N_OPTIONS):
+        return data
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        mode = st.radio("Rank", ["Highest", "Lowest"], horizontal=True, key=f"rank_{key}")
+    with c2:
+        n = st.selectbox("Number of categories", TOP_N_OPTIONS, index=TOP_N_OPTIONS.index(default) if default in TOP_N_OPTIONS else 1, key=f"topn_{key}")
+    totals = data.groupby(category_col, observed=False)["Count"].sum().sort_values(ascending=(mode == "Lowest"))
+    return data[data[category_col].isin(totals.head(n).index)].copy()
+
+
+def bar_chart(data: pd.DataFrame, x: str, y: str, color: Optional[str] = None, title: str = "", horizontal: bool = False, height: int = 420, category_orders: Optional[Dict] = None) -> None:
     if data.empty:
         st.info("No records available for this chart.")
         return
-    chart_data = data.copy()
-    y_order = []
-    auto_orders = {
-        "age_group": AGE_GROUP_ORDER,
-        "gender_clean": GENDER_ORDER,
-        "first_visit_clean": YES_NO_ORDER,
-    }
-    if horizontal:
-        chart_data, y_order = sort_chart_by_total(chart_data, y, keep_age_order=(y == "age_group"), axis="y")
-        if y_order:
-            auto_orders[y] = y_order
-    elif x != "age_group" and "Count" in chart_data.columns:
-        chart_data, x_order = sort_chart_by_total(chart_data, x)
-        if x_order:
-            auto_orders[x] = x_order
-    if category_orders:
-        auto_orders.update(category_orders)
     fig = px.bar(
-        chart_data,
+        data,
         x=x,
         y=y,
         color=color,
         text="Count" if "Count" in data.columns else None,
         orientation="h" if horizontal else "v",
         title=title,
-        category_orders=auto_orders,
-        color_discrete_sequence=px.colors.qualitative.Set2,
+        color_discrete_sequence=CHART_COLORS,
+        category_orders=category_orders or {},
     )
     fig.update_traces(texttemplate="%{text:,}", textposition="outside", cliponaxis=False)
     fig.update_layout(
         height=height,
-        margin=dict(l=12, r=24, t=58, b=18),
+        margin=dict(l=12, r=30, t=58, b=24),
         plot_bgcolor="white",
         paper_bgcolor="white",
         legend_title_text="",
-        title_font=dict(size=18),
+        title_font=dict(size=18, color="#172554"),
         font=dict(size=13, color="#111827"),
     )
     fig.update_xaxes(showgrid=True, gridcolor="#e9eef5", zeroline=False)
     fig.update_yaxes(showgrid=False, zeroline=False)
-    if horizontal and y_order:
-        fig.update_yaxes(categoryorder="array", categoryarray=y_order)
-    chart_key = file_slug(title)
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={
-            "displayModeBar": True,
-            "responsive": True,
-            "toImageButtonOptions": {"format": "png", "filename": chart_key, "scale": 2},
-        },
-    )
-    chart_image_download(fig, chart_key, title)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
 
 
-def pie_chart(data, names, values, title=""):
+def pie_chart(data: pd.DataFrame, names: str, values: str, title: str) -> None:
     if data.empty:
         st.info("No records available for this chart.")
         return
-    fig = px.pie(
-        data,
-        names=names,
-        values=values,
-        hole=0.42,
-        title=title,
-        category_orders={names: YES_NO_ORDER},
-        color_discrete_sequence=px.colors.qualitative.Set2,
-    )
+    fig = px.pie(data, names=names, values=values, hole=0.42, title=title, color_discrete_sequence=CHART_COLORS)
     fig.update_traces(textposition="inside", textinfo="percent+label")
-    fig.update_layout(
-        height=420,
-        margin=dict(l=12, r=24, t=58, b=18),
-        paper_bgcolor="white",
-        title_font=dict(size=18),
-        font=dict(size=13, color="#111827"),
-        legend_title_text="",
-    )
-    chart_key = file_slug(title)
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={
-            "displayModeBar": True,
-            "responsive": True,
-            "toImageButtonOptions": {"format": "png", "filename": chart_key, "scale": 2},
-        },
-    )
-    chart_image_download(fig, chart_key, title)
+    fig.update_layout(height=430, margin=dict(l=12, r=24, t=58, b=18), paper_bgcolor="white", title_font=dict(size=18, color="#172554"), font=dict(size=13, color="#111827"), legend_title_text="")
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
 
 
-def sliced_bar_chart(data, category_col, slicer_key, x, y, color=None, title="", horizontal=False, height=420, category_orders=None, default=10):
-    if data.empty or category_col not in data.columns or data[category_col].nunique(dropna=True) <= min(TOP_N_OPTIONS):
-        bar_chart(data, x, y, color, title, horizontal, height, category_orders)
+def line_chart(data: pd.DataFrame, x: str, y: str, color: Optional[str] = None, title: str = "", height: int = 380) -> None:
+    if data.empty:
+        st.info("No records available for this chart.")
         return
-    control_col, chart_col = st.columns([0.23, 0.77])
-    with control_col:
-        st.markdown("<div class='chart-control-title'>Chart controls</div>", unsafe_allow_html=True)
-        chart_data = top_n_chart_control(data, category_col, slicer_key, default=default)
-    with chart_col:
-        bar_chart(chart_data, x, y, color, title, horizontal, height, category_orders)
+    fig = px.line(data, x=x, y=y, color=color, markers=True, title=title, color_discrete_sequence=CHART_COLORS)
+    fig.update_traces(line_shape="spline", line_smoothing=0.5)
+    fig.update_layout(height=height, margin=dict(l=12, r=24, t=58, b=18), plot_bgcolor="white", paper_bgcolor="white", legend_title_text="", title_font=dict(size=18, color="#172554"), font=dict(size=13, color="#111827"))
+    fig.update_xaxes(showgrid=True, gridcolor="#e9eef5", zeroline=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#e9eef5", zeroline=False)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
+
+# -----------------------------------------------------------------------------
+# UI helpers
+# -----------------------------------------------------------------------------
+def page_header(title: str, subtitle: Optional[str] = None) -> None:
+    subtitle_html = f"<p>{subtitle}</p>" if subtitle else ""
+    st.markdown(f"<div class='dashboard-title'><h1>{title}</h1>{subtitle_html}</div>", unsafe_allow_html=True)
 
 
-
-def section_note(text):
-    st.caption(text)
-
-
-def slug(value):
-    value = re.sub(r"[^a-zA-Z0-9]+", "_", str(value)).strip("_").lower()
-    return value[:80] or "blank"
+def section_header(title: str, subtitle: Optional[str] = None) -> None:
+    st.markdown(f"<div class='section-heading'>{title}</div>", unsafe_allow_html=True)
+    if subtitle:
+        st.markdown(f"<div class='section-subtitle'>{subtitle}</div>", unsafe_allow_html=True)
 
 
-def scope_switch(key):
-    scope_key = f"filter_{key}_scope"
-    if scope_key not in st.session_state:
-        st.session_state[scope_key] = "All"
-    options = ["All", "Custom"]
-    if hasattr(st, "pills"):
-        try:
-            selected_scope = st.pills(
-                "Scope",
-                options,
-                selection_mode="single",
-                key=scope_key,
-                label_visibility="collapsed",
-            )
-            return selected_scope or "All"
-        except Exception:
-            pass
-    if hasattr(st, "segmented_control"):
-        try:
-            selected_scope = st.segmented_control(
-                "Scope",
-                options,
-                key=scope_key,
-                label_visibility="collapsed",
-            )
-            return selected_scope or "All"
-        except Exception:
-            pass
-    return st.radio(
-        "Scope",
-        options,
-        horizontal=True,
-        key=scope_key,
-        label_visibility="collapsed",
-    )
+def metric_card(label, value, helper=None, tone="primary") -> None:
+    tone_map = {"primary": "#1d4ed8", "success": "#15803d", "warning": "#d97706", "danger": "#dc2626", "neutral": "#64748b"}
+    border = tone_map.get(tone, tone_map["primary"])
+    helper_html = f"<div class='metric-helper'>{helper}</div>" if helper else ""
+    st.markdown(f"<div class='metric-card' style='border-top:4px solid {border};'><div class='metric-label'>{label}</div><div class='metric-value'>{value}</div>{helper_html}</div>", unsafe_allow_html=True)
 
 
-def value_selector(options, key, searchable_threshold=30):
-    selected_key = f"filter_{key}_selected"
-    if selected_key not in st.session_state:
-        st.session_state[selected_key] = []
-    st.session_state[selected_key] = [v for v in st.session_state[selected_key] if v in options]
-
-    if hasattr(st, "pills") and len(options) <= searchable_threshold:
-        try:
-            selected = st.pills(
-                "Choose values",
-                options,
-                selection_mode="multi",
-                key=selected_key,
-                label_visibility="collapsed",
-            )
-            return selected or []
-        except Exception:
-            pass
-
-    st.caption("Search and choose one or more values.")
-    return st.multiselect(
-        "Choose values",
-        options,
-        key=selected_key,
-        placeholder="Type to search",
-        label_visibility="collapsed",
-    )
-
-
-def multi_choice_selector(label, options, key, disabled=False, disabled_message=None, order=None):
-    options = ordered_unique(pd.Series(options), order=order)
-    with st.sidebar.expander(label, expanded=not disabled):
-        if disabled:
-            st.caption(disabled_message or "Complete the previous filter first.")
-            return [], False
-        if not options:
-            st.caption("No options available.")
-            return [], False
-
-        st.caption(f"{len(options):,} available")
-        selected_scope = scope_switch(key)
-        if selected_scope == "All":
-            st.caption("All available values are included for this level.")
-            return [], False
-
-        selected = value_selector(options, key)
-        if not selected:
-            st.caption("Select at least one value to continue.")
-        else:
-            st.caption(f"{len(selected):,} selected")
-        return selected, True
-
-
-def apply_filter(data, column, selected, explicit):
-    if not explicit:
-        return data.copy()
-    if not selected:
-        return data.iloc[0:0].copy()
-    return data[data[column].isin(selected)].copy()
-
-
-def format_selection(selected, explicit, all_label):
-    if not explicit:
-        return all_label
-    if not selected:
-        return "None selected"
-    return ", ".join(map(str, selected))
-
-
-def metric_card(label, value, helper=None):
-    helper_html = f"<span>{helper}</span>" if helper else ""
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-helper">{helper_html}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def insight_card(label, value, helper=None):
+def insight_card(label, value, helper=None) -> None:
     helper_html = f"<div class='insight-helper'>{helper}</div>" if helper else ""
-    st.markdown(
-        f"""
-        <div class="insight-card">
-            <div class="insight-label">{label}</div>
-            <div class="insight-value">{value}</div>
-            {helper_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<div class='insight-card'><div class='insight-label'>{label}</div><div class='insight-value'>{value}</div>{helper_html}</div>", unsafe_allow_html=True)
 
 
-def top_category(data, column, exclude=None):
-    if data.empty or column not in data.columns:
-        return "N/A", 0
-    exclude = set(exclude or [])
-    series = data[column].astype("string")
-    series = series[~series.isin(exclude)]
-    counts = series.value_counts(dropna=True)
-    if counts.empty:
-        return "N/A", 0
-    return str(counts.index[0]), int(counts.iloc[0])
+SECTION_META = {
+    "Overview": {"icon": "🏠", "label": "Overview", "desc": "Coverage, age profile, top issues and top activities for the active filters."},
+    "Monthly Trends": {"icon": "📈", "label": "Monthly Trends", "desc": "Month-by-month visit volume, gender trends, referral and first-visit rates."},
+    "CPVs KPIs": {"icon": "👥", "label": "CPVs KPIs", "desc": "Staff / CPV performance, submissions, referrals and operating coverage."},
+    "Demographics": {"icon": "🧒", "label": "Demographics", "desc": "First vs repeat visits, gender, age group and site-level beneficiary profile."},
+    "Games & Activities": {"icon": "🎲", "label": "Games & Activities", "desc": "Harmonised games, activities, multiple-activity combinations and engagement patterns."},
+    "Protection & Support": {"icon": "🛡️", "label": "Protection & Support", "desc": "Disability, issue mentions, multi-issue records and support offered."},
+    "Referrals": {"icon": "🔁", "label": "Referrals", "desc": "Referral rates, destinations and external referral agency breakdowns."},
+    "Data Quality": {"icon": "✅", "label": "Data Quality", "desc": "Completeness checks and harmonisation review for operational data quality."},
+    "Raw Data": {"icon": "📄", "label": "Raw Data", "desc": "Filtered row-level extract for validation and download."},
+}
 
 
-def yes_count(data, column):
-    if data.empty or column not in data.columns:
-        return 0
-    return int(data[column].astype("string").eq("Yes").sum())
+def section_label(option: str) -> str:
+    meta = SECTION_META.get(option, {"icon": "📌", "label": option})
+    return f"{meta['icon']} {meta['label']}"
 
 
-def render_badges(items):
-    if not items:
-        return
-    badge_html = "".join(f"<span class='status-badge status-{kind}'>{label}</span>" for label, kind in items)
-    st.markdown(f"<div class='badge-row'>{badge_html}</div>", unsafe_allow_html=True)
-
-
-def render_filter_chips(items):
-    chips = []
-    for label, value, active in items:
-        css_class = "filter-chip active" if active else "filter-chip"
-        chips.append(f"<span class='{css_class}'><strong>{label}</strong>: {value}</span>")
-    st.markdown(f"<div class='filter-chip-row'>{''.join(chips)}</div>", unsafe_allow_html=True)
-
-
-def category_share_insight(data, category_col, subject, value_col="Count"):
-    if data.empty or category_col not in data.columns or value_col not in data.columns:
-        return f"No {subject.lower()} are available for the current filters."
-    totals = data.groupby(category_col, observed=False)[value_col].sum().sort_values(ascending=False)
-    totals = totals[totals > 0]
-    if totals.empty:
-        return f"No {subject.lower()} are available for the current filters."
-    top_label = str(totals.index[0])
-    top_value = int(totals.iloc[0])
-    total_value = int(totals.sum())
-    share = top_value / total_value if total_value else 0
-    return f"{top_label} is the leading {subject.lower()}, accounting for {share:.1%} of {total_value:,} records in the current filter."
-
-
-def render_note(text):
-    if text:
-        st.markdown(f"<div class='insight-note'>{text}</div>", unsafe_allow_html=True)
-
-
-def render_analysis_block(title, table, chart_renderer, note, key, simple=False, badges=None):
-    st.markdown(f"<div class='analysis-title'>{title}</div>", unsafe_allow_html=True)
-    render_badges(badges or [])
-    chart_tab, table_tab, notes_tab = st.tabs(["Chart", "Table", "Notes"])
-    with chart_tab:
-        chart_renderer()
-    with table_tab:
-        render_table(table, f"{key}_table", title, simple=simple)
-    with notes_tab:
-        render_note(note)
-
-
-def dashboard_nav(options, key="dashboard_section"):
-    if st.session_state.get(key) not in options:
+def nav_menu(options: List[str], key: str = "dashboard_section") -> str:
+    if key not in st.session_state or st.session_state[key] not in options:
         st.session_state[key] = options[0]
+
+    st.markdown("<div class='section-nav-shell'>", unsafe_allow_html=True)
     if hasattr(st, "pills"):
         try:
             selected = st.pills(
@@ -1479,8 +1616,10 @@ def dashboard_nav(options, key="dashboard_section"):
                 selection_mode="single",
                 key=key,
                 label_visibility="collapsed",
-            )
-            return selected or options[0]
+                format_func=section_label,
+            ) or options[0]
+            st.markdown("</div>", unsafe_allow_html=True)
+            return selected
         except Exception:
             pass
     if hasattr(st, "segmented_control"):
@@ -1490,990 +1629,560 @@ def dashboard_nav(options, key="dashboard_section"):
                 options,
                 key=key,
                 label_visibility="collapsed",
-            )
-            return selected or options[0]
+                format_func=section_label,
+            ) or options[0]
+            st.markdown("</div>", unsafe_allow_html=True)
+            return selected
         except Exception:
             pass
-    return st.radio(
+    selected = st.radio(
         "Dashboard section",
         options,
         index=options.index(st.session_state.get(key, options[0])),
-        key=key,
         horizontal=True,
+        key=key,
         label_visibility="collapsed",
+        format_func=section_label,
     )
+    st.markdown("</div>", unsafe_allow_html=True)
+    return selected
 
 
-def load_external_css(path):
-    if not path.exists():
-        return
-    try:
-        css = path.read_text(encoding="utf-8")
-    except Exception as exc:
-        st.caption(f"Custom CSS could not be loaded: {exc}")
-        return
-    if css.strip():
-        st.markdown(f"<style>\n{css}\n</style>", unsafe_allow_html=True)
-
-
-st.set_page_config(
-    page_title="Tdh Kenya CFS Dashboard",
-    page_icon="CFS",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.markdown(
-    """
-    <style>
-    :root {
-        --ink: #111827;
-        --muted: #475569;
-        --line: #cbd5e1;
-        --panel: #ffffff;
-        --soft: #f5f8fc;
-        --brand: #0f6fbd;
-        --brand-dark: #094f8d;
-    }
-    html, body, [class*="css"] {
-        color: var(--ink);
-    }
-    p, span, label, div, .stMarkdown, .stCaption, [data-testid="stMarkdownContainer"] {
-        color: var(--ink);
-    }
-    .main .block-container {
-        padding-top: 1.2rem;
-        padding-bottom: 2rem;
-        max-width: 1480px;
-    }
-    h1, h2, h3 {
-        color: var(--ink);
-        letter-spacing: 0;
-    }
-    section[data-testid="stSidebar"] {
-        background: #f8fafc;
-        border-right: 1px solid var(--line);
-    }
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] span {
-        color: #1f2937 !important;
-    }
-    div[data-testid="stExpander"] {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #ffffff;
-    }
-    .dashboard-title {
-        padding: 1rem 1.2rem;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: linear-gradient(90deg, #ffffff 0%, #e8f2ff 100%);
-        margin-bottom: 1rem;
-    }
-    .dashboard-title h1 {
-        margin: 0;
-        font-size: 2rem;
-        line-height: 1.2;
-    }
-    .dashboard-title p {
-        margin: .35rem 0 0 0;
-        color: var(--muted);
-        font-size: .98rem;
-    }
-    .record-status {
-        display: inline-flex;
-        align-items: center;
-        gap: .45rem;
-        padding: .65rem .9rem;
-        margin: -.35rem 0 1rem 0;
-        background: #eef7f2;
-        border: 1px solid #cce6d8;
-        border-radius: 8px;
-        color: #1f5135;
-        font-weight: 700;
-        font-size: .95rem;
-    }
-    .filter-summary {
-        padding: .85rem 1rem;
-        background: #f1f7fd;
-        border: 1px solid #cfe0f5;
-        border-radius: 8px;
-        color: #213547;
-        margin-bottom: 1rem;
-        font-size: .95rem;
-    }
-    .filter-group-title {
-        margin: .9rem 0 .35rem 0;
-        padding: .45rem .65rem;
-        border-left: 4px solid var(--brand);
-        background: #eef6ff;
-        color: #0f172a;
-        font-weight: 900;
-        border-radius: 6px;
-    }
-    .filter-chip-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: .45rem;
-        margin: -.25rem 0 1rem 0;
-    }
-    .filter-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: .25rem;
-        padding: .45rem .65rem;
-        border-radius: 999px;
-        border: 1px solid #d5dee9;
-        background: #ffffff;
-        color: #334155;
-        font-size: .85rem;
-        font-weight: 700;
-    }
-    .filter-chip.active {
-        border-color: #8fc3f2;
-        background: #eaf5ff;
-        color: #0b4f84;
-    }
-    .badge-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: .4rem;
-        margin: .25rem 0 .65rem 0;
-    }
-    .status-badge {
-        display: inline-flex;
-        align-items: center;
-        padding: .32rem .55rem;
-        border-radius: 999px;
-        font-size: .76rem;
-        font-weight: 900;
-        border: 1px solid #d5dee9;
-    }
-    .status-good {
-        background: #ecfdf3;
-        border-color: #b7e4c7;
-        color: #166534;
-    }
-    .status-review {
-        background: #fff7ed;
-        border-color: #fed7aa;
-        color: #9a3412;
-    }
-    .status-harmonized {
-        background: #eef6ff;
-        border-color: #bfdbfe;
-        color: #1d4ed8;
-    }
-    .status-missing {
-        background: #f8fafc;
-        border-color: #cbd5e1;
-        color: #475569;
-    }
-    .analysis-title {
-        margin: 1.15rem 0 .2rem 0;
-        padding-top: .35rem;
-        color: #0f172a;
-        font-size: 1.2rem;
-        line-height: 1.3;
-        font-weight: 900;
-    }
-    .chart-control-title {
-        margin: .45rem 0 .65rem 0;
-        padding: .55rem .65rem;
-        border-radius: 8px;
-        border: 1px solid #d5dee9;
-        background: #f8fbff;
-        color: #0f172a;
-        font-size: .9rem;
-        font-weight: 900;
-        text-align: center;
-    }
-    .insight-note {
-        padding: .9rem 1rem;
-        border-radius: 8px;
-        border: 1px solid #d5dee9;
-        background: #fbfdff;
-        color: #1f2937;
-        font-weight: 700;
-    }
-    .export-row {
-        margin: .35rem 0 1rem 0;
-    }
-    .metric-card {
-        border: 1px solid var(--line);
-        background: var(--panel);
-        border-radius: 8px;
-        padding: 1rem;
-        min-height: 112px;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
-    }
-    .metric-label {
-        color: #334155;
-        font-size: .84rem;
-        font-weight: 700;
-        text-transform: uppercase;
-    }
-    .metric-value {
-        color: var(--brand-dark);
-        font-size: 1.72rem;
-        font-weight: 800;
-        margin-top: .25rem;
-    }
-    .metric-helper {
-        color: #475569;
-        font-size: .78rem;
-        margin-top: .15rem;
-    }
-    .quick-insights {
-        margin: .6rem 0 1.1rem 0;
-        padding: 1.05rem;
-        border: 1px solid #d5dee9;
-        border-radius: 8px;
-        background: #f8fbff;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, .06);
-    }
-    .section-heading {
-        margin: 1.25rem 0 .55rem 0;
-        color: #0f172a;
-        font-size: 1.55rem;
-        line-height: 1.25;
-        font-weight: 900;
-    }
-    .dashboard-section-heading {
-        font-size: 1.75rem;
-        letter-spacing: 0;
-        margin-top: 1.35rem;
-    }
-    .section-subtitle {
-        margin: -.25rem 0 .8rem 0;
-        color: #334155;
-        font-size: 1rem;
-        font-weight: 700;
-    }
-    .insight-card {
-        min-height: 104px;
-        padding: .95rem 1rem;
-        border: 1px solid #d5dee9;
-        border-radius: 8px;
-        background: #ffffff;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
-    }
-    .insight-label {
-        color: #334155;
-        font-size: .78rem;
-        font-weight: 800;
-        text-transform: uppercase;
-    }
-    .insight-value {
-        color: #0f172a;
-        font-size: 1.28rem;
-        font-weight: 900;
-        margin-top: .25rem;
-        line-height: 1.25;
-    }
-    .insight-helper {
-        color: #475569;
-        font-size: .78rem;
-        margin-top: .2rem;
-    }
-    div[data-testid="stTabs"] button p {
-        color: #111827 !important;
-        font-weight: 850 !important;
-        font-size: .98rem !important;
-    }
-    .section-block {
-        padding: .9rem 0 .25rem 0;
-        border-top: 1px solid var(--line);
-        margin-top: .8rem;
-    }
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #d5dee9;
-        border-radius: 8px;
-        overflow: hidden;
-        background: #ffffff;
-    }
-    .dataframe th {
-        font-weight: 800 !important;
-        color: #111827 !important;
-        background: #eaf2fb !important;
-        padding: 9px 10px !important;
-    }
-    .dataframe td {
-        color: #1f2937 !important;
-        padding: 8px 10px !important;
-        border-color: #e5edf5 !important;
-    }
-    div[data-testid="stDataFrame"] [role="gridcell"],
-    div[data-testid="stDataFrame"] [role="columnheader"] {
-        color: #1f2937 !important;
-        font-size: 13px !important;
-    }
-    button[kind="primary"] {
-        background: var(--brand) !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-load_external_css(CSS_PATH)
-
-title_col, logo_col = st.columns([5, 1])
-with title_col:
+def section_intro_card(section: str) -> None:
+    meta = SECTION_META.get(section, {"icon": "📌", "label": section, "desc": "Explore the selected analytical view."})
     st.markdown(
-        """
-        <div class="dashboard-title">
-            <h1>Tdh Kenya Child Friendly Spaces Dashboard</h1>
+        f"""
+        <div class="section-intro-card">
+            <div class="section-intro-icon">{meta['icon']}</div>
+            <div>
+                <div class="section-intro-title">{meta['label']}</div>
+                <div class="section-intro-desc">{meta['desc']}</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def selector_control(label: str, options: List[str], key: str, order: Optional[List] = None) -> List[str]:
+    """Professional All/Custom selector used inside the sidebar filter panel."""
+    mode_key = f"filter_mode_{key}"
+    values_key = f"filter_values_{key}"
+
+    if mode_key not in st.session_state:
+        st.session_state[mode_key] = "All"
+    if values_key not in st.session_state:
+        st.session_state[values_key] = []
+
+    # Remove stale selections when source data changes.
+    st.session_state[values_key] = [v for v in st.session_state[values_key] if v in options]
+
+    if not options:
+        st.caption("No values available after previous filters.")
+        return []
+
+    if hasattr(st, "segmented_control"):
+        try:
+            mode = st.segmented_control("Scope", ["All", "Custom"], key=mode_key, label_visibility="collapsed")
+        except Exception:
+            mode = st.radio("Scope", ["All", "Custom"], horizontal=True, key=mode_key, label_visibility="collapsed")
+    else:
+        mode = st.radio("Scope", ["All", "Custom"], horizontal=True, key=mode_key, label_visibility="collapsed")
+
+    if mode == "All":
+        st.markdown(
+            f"<div class='filter-all-note'>All <b>{len(options):,}</b> available values are included.</div>",
+            unsafe_allow_html=True,
+        )
+        return []
+
+    if hasattr(st, "pills") and len(options) <= 12:
+        try:
+            selected = st.pills(
+                "Choose values",
+                options,
+                selection_mode="multi",
+                key=values_key,
+                label_visibility="collapsed",
+            ) or []
+        except Exception:
+            selected = st.multiselect("Choose values", options, key=values_key, placeholder="Type to search", label_visibility="collapsed")
+    else:
+        selected = st.multiselect("Choose values", options, key=values_key, placeholder="Type to search", label_visibility="collapsed")
+
+    st.caption(f"{len(selected):,} selected" if selected else "Custom mode: select one or more values.")
+    return selected
+
+
+def multiselect_filter(label: str, data: pd.DataFrame, column: str, order: Optional[List] = None) -> List[str]:
+    options = ordered_unique(data[column], order=order) if column in data.columns else []
+    key = re.sub(r"[^a-zA-Z0-9]+", "_", column).strip("_").lower()
+    with st.sidebar.expander(label, expanded=False):
+        available_records = len(data) if column in data.columns else 0
+        st.markdown(
+            f"<div class='filter-meta'><span>{len(options):,} values</span><span>{available_records:,} records in scope</span></div>",
+            unsafe_allow_html=True,
+        )
+        return selector_control(label, options, key=key, order=order)
+
+
+def filter_if_selected(data: pd.DataFrame, column: str, selected: List[str]) -> pd.DataFrame:
+    if not selected or column not in data.columns:
+        return data
+    return data[data[column].astype(str).isin([str(v) for v in selected])].copy()
+
+
+def top_category(data: pd.DataFrame, column: str, exclude: Optional[List] = None) -> Tuple[str, int]:
+    if data.empty or column not in data.columns:
+        return "N/A", 0
+    s = data[column].astype(str)
+    if exclude:
+        s = s[~s.isin(set(exclude))]
+    counts = s.value_counts(dropna=True)
+    return (str(counts.index[0]), int(counts.iloc[0])) if not counts.empty else ("N/A", 0)
+
+
+def yes_count(data: pd.DataFrame, column: str) -> int:
+    return int(data[column].astype(str).eq("Yes").sum()) if column in data.columns else 0
+
+# -----------------------------------------------------------------------------
+# Streamlit app
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Tdh Kenya CFS Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+load_external_css(CSS_PATH)
+
+header_col, logo_col = st.columns([5, 1])
+with header_col:
+    page_header(
+        "Tdh Kenya Child Friendly Spaces Dashboard",
+        "Professional monitoring dashboard for CFS visits, demographics, protection issues, support, activities, referrals, and data quality.",
+    )
 with logo_col:
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), use_container_width=True)
-record_status_slot = st.empty()
 
-if not DATA_PATH.exists():
-    st.error(f"Data file not found: {DATA_PATH}")
-    st.stop()
-
-if st.sidebar.button("Refresh data and clear cache", use_container_width=True):
-    st.cache_data.clear()
-    try:
-        if PREPARED_CACHE_PATH.exists():
-            PREPARED_CACHE_PATH.unlink()
-    except Exception:
-        pass
-    for state_key in list(st.session_state.keys()):
-        if state_key.startswith("filter_") or state_key in {"date_filter", "date_from_filter", "date_to_filter"}:
-            st.session_state.pop(state_key, None)
-    st.rerun()
-
-modified_time = DATA_PATH.stat().st_mtime
-df, issue_long, support_long, game_long = load_and_prepare(modified_time)
-
-st.sidebar.header("Filters")
-reset_col, refresh_col = st.sidebar.columns(2)
-with reset_col:
-    if st.button("Reset filters", use_container_width=True):
+st.sidebar.markdown("<div class='sidebar-title'>Dashboard Controls</div>", unsafe_allow_html=True)
+ctrl_col1, ctrl_col2 = st.sidebar.columns(2)
+with ctrl_col1:
+    if st.button("🔄 Reload", use_container_width=True, help="Clear cached data and reload from the configured dataset."):
+        st.cache_data.clear()
+        try:
+            PREPARED_CACHE_PATH.unlink(missing_ok=True)
+        except Exception:
+            pass
+        st.rerun()
+with ctrl_col2:
+    if st.button("♻ Reset filters", use_container_width=True, help="Clear all active filter selections."):
         for state_key in list(st.session_state.keys()):
-            if state_key.startswith("filter_") or state_key in {"date_filter", "date_from_filter", "date_to_filter"}:
+            if state_key.startswith("filter_") or state_key in {"date_from_filter", "date_to_filter"}:
                 st.session_state.pop(state_key, None)
         st.rerun()
-with refresh_col:
-    st.caption("Reset keeps the prepared data cache.")
-st.sidebar.caption("Use each level in order. Later filters unlock after the location path is defined.")
-st.sidebar.markdown("<div class='filter-group-title'>Date & Location Filters</div>", unsafe_allow_html=True)
-valid_dates = df["date"].dropna()
-if valid_dates.empty:
-    st.sidebar.warning("No valid dates found in the data.")
-    date_scope = df.copy()
-    start_date = end_date = None
-else:
-    min_date = valid_dates.min().date()
-    max_date = valid_dates.max().date()
-    st.sidebar.markdown("**1. Date range**")
-    from_col, to_col = st.sidebar.columns(2)
-    with from_col:
-        from_date = st.date_input("From:", value=min_date, min_value=min_date, max_value=max_date, key="date_from_filter")
-    with to_col:
-        to_date = st.date_input("To:", value=max_date, min_value=min_date, max_value=max_date, key="date_to_filter")
-    if from_date > to_date:
-        st.sidebar.warning("From date is after To date; dates were swapped for this view.")
-        from_date, to_date = to_date, from_date
-    start_date, end_date = pd.to_datetime(from_date), pd.to_datetime(to_date)
-    date_scope = df[df["date"].between(start_date, end_date, inclusive="both")].copy()
 
-selected_settlements, settlement_explicit = multi_choice_selector(
-    "2. Camp Name",
-    date_scope["settlement_clean"],
-    "settlement",
-)
-settlement_scope = apply_filter(date_scope, "settlement_clean", selected_settlements, settlement_explicit)
+auto_sync = st.sidebar.toggle("Auto-sync dataset", value=False, help="Optional: periodically reload so updated source data is picked up. Keep off for fastest interaction.")
+refresh_minutes = st.sidebar.selectbox("Sync interval", [5, 10, 15, 30, 60], index=2, disabled=not auto_sync)
+if auto_sync:
+    # Keep the auto-refresh helper inside the sidebar so it does not create
+    # a blank iframe/gap in the main dashboard body.
+    with st.sidebar:
+        components.html(
+            f"""
+            <script>
+            const minutes = {int(refresh_minutes)};
+            setTimeout(() => {{ window.parent.location.reload(); }}, minutes * 60 * 1000);
+            </script>
+            """,
+            height=1,
+            scrolling=False,
+        )
 
-location_disabled = not settlement_explicit or not selected_settlements or settlement_scope.empty
-selected_locations, location_explicit = multi_choice_selector(
-    "3. Specific camp location",
-    settlement_scope["location_clean"] if not settlement_scope.empty else [],
-    "location",
-    disabled=location_disabled,
-    disabled_message="Set Camp Name to Custom, then choose at least one camp first.",
-)
-location_scope = apply_filter(settlement_scope, "location_clean", selected_locations, location_explicit)
+data_path = resolve_data_path()
+source_label = ""
+source_modified = None
 
-cfs_disabled = location_disabled or not location_explicit or not selected_locations or location_scope.empty
-selected_cfs, cfs_explicit = multi_choice_selector(
-    "4. CFS / site",
-    location_scope["cfs_clean"] if not location_scope.empty else [],
-    "cfs",
-    disabled=cfs_disabled,
-    disabled_message="Choose at least one Specific camp location first.",
-)
-cfs_scope = apply_filter(location_scope, "cfs_clean", selected_cfs, cfs_explicit)
-
-st.sidebar.markdown("<div class='filter-group-title'>Operational Filters</div>", unsafe_allow_html=True)
-downstream_disabled = cfs_disabled or not cfs_explicit or not selected_cfs or cfs_scope.empty
-selected_staff, staff_explicit = multi_choice_selector(
-    "5. Staff / CPV",
-    cfs_scope["staff_clean"] if not cfs_scope.empty else [],
-    "staff",
-    disabled=downstream_disabled,
-    disabled_message="Choose at least one CFS / site first.",
-)
-staff_scope = apply_filter(cfs_scope, "staff_clean", selected_staff, staff_explicit)
-
-st.sidebar.markdown("<div class='filter-group-title'>Beneficiary Filters</div>", unsafe_allow_html=True)
-selected_gender, gender_explicit = multi_choice_selector(
-    "6. Gender",
-    staff_scope["gender_clean"] if not staff_scope.empty else [],
-    "gender",
-    disabled=downstream_disabled,
-    disabled_message="Choose at least one CFS / site first.",
-    order=GENDER_ORDER,
-)
-gender_scope = apply_filter(staff_scope, "gender_clean", selected_gender, gender_explicit)
-
-selected_age, age_explicit = multi_choice_selector(
-    "7. Age group",
-    gender_scope["age_group"].astype("string") if not gender_scope.empty else [],
-    "age_group",
-    disabled=downstream_disabled,
-    disabled_message="Choose at least one CFS / site first.",
-    order=AGE_GROUP_ORDER,
-)
-age_scope = apply_filter(gender_scope.assign(age_group=gender_scope["age_group"].astype("string")), "age_group", selected_age, age_explicit)
-
-selected_disability, disability_explicit = multi_choice_selector(
-    "8. Living with disability",
-    age_scope["disability_status_clean"].astype("string") if not age_scope.empty else [],
-    "disability",
-    disabled=downstream_disabled,
-    disabled_message="Choose at least one CFS / site first.",
-    order=YES_NO_ORDER,
-)
-filtered = apply_filter(
-    age_scope.assign(disability_status_clean=age_scope["disability_status_clean"].astype("string")),
-    "disability_status_clean",
-    selected_disability,
-    disability_explicit,
-)
-filtered["age_group"] = pd.Categorical(filtered["age_group"], categories=AGE_GROUP_ORDER, ordered=True)
-filtered["gender_clean"] = pd.Categorical(filtered["gender_clean"], categories=GENDER_ORDER, ordered=True)
-filtered["first_visit_clean"] = pd.Categorical(filtered["first_visit_clean"], categories=YES_NO_ORDER, ordered=True)
-filtered["disability_status_clean"] = pd.Categorical(filtered["disability_status_clean"], categories=YES_NO_ORDER, ordered=True)
-
-context_columns = ["record_id", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_group"]
-issue_context = issue_long.merge(filtered[context_columns], on="record_id", how="inner")
-support_context = support_long.merge(filtered[context_columns], on="record_id", how="inner")
-game_context = game_long.merge(filtered[context_columns], on="record_id", how="inner")
-
-source_modified = time.strftime("%d %b %Y %H:%M", time.localtime(modified_time))
-st.caption(f"Last modified: {source_modified}")
-
-if start_date is not None and end_date is not None:
-    start_label = start_date.strftime("%d %b %Y")
-    end_label = end_date.strftime("%d %b %Y")
-    date_selected_label = start_label if start_label == end_label else f"{start_label} to {end_label}"
-else:
-    date_selected_label = "All available dates"
-record_status_slot.markdown(
-    f"<div class='record-status'>Showing {len(filtered):,} of {len(df):,} records | Date selected: {date_selected_label}</div>",
-    unsafe_allow_html=True,
-)
-
-summary_bits = [
-    f"Camp Name: {format_selection(selected_settlements, settlement_explicit, 'All camps')}",
-    f"Specific camp location: {format_selection(selected_locations, location_explicit, 'All specific camp locations')}",
-    f"CFS / site: {format_selection(selected_cfs, cfs_explicit, 'All CFS / sites')}",
-    f"Staff: {format_selection(selected_staff, staff_explicit, 'All staff')}",
-    f"Gender: {format_selection(selected_gender, gender_explicit, 'All genders')}",
-    f"Age group: {format_selection(selected_age, age_explicit, 'All age groups')}",
-    f"Disability: {format_selection(selected_disability, disability_explicit, 'All disability statuses')}",
-]
-st.sidebar.markdown(
-    f"<div class='filter-summary'><strong>Current filter path:</strong><br>{'<br>'.join(summary_bits)}</div>",
-    unsafe_allow_html=True,
-)
-
-export_cols = [
-    "record_id", "date", "month", "consent_clean", "staff_clean", "child_name",
-    "gender_clean", "age_clean", "age_group", "disability_status_clean",
-    "disability_type_clean", "disability_type_display", "settlement_clean",
-    "location_clean", "cfs_clean", "games_played_clean", "issues_combined",
-    "support_combined", "first_visit_clean", "referral_made_clean",
-    "referral_destination_grouped", "external_referral_agency_clean",
-]
-download_df = filtered.copy()
-for col in export_cols:
-    if col in download_df.columns and str(download_df[col].dtype) == "category":
-        download_df[col] = download_df[col].astype("string")
-
-
-referral_rate = filtered["referral_made_clean"].astype("string").eq("Yes").mean()
-disability_rate = filtered["disability_status_clean"].astype("string").eq("Yes").mean()
-first_visit_rate = filtered["first_visit_clean"].astype("string").eq("Yes").mean()
-avg_age = filtered["age_clean"].mean()
-
-k1, k2, k3, k4, k5 = st.columns(5)
-with k1:
-    metric_card("Total CFS visits", f"{len(filtered):,}", "Filtered records")
-with k2:
-    metric_card("Referral rate", f"{referral_rate:.1%}", "Referral marked Yes")
-with k3:
-    metric_card("Disability prevalence", f"{disability_rate:.1%}", "Children recorded as Yes")
-with k4:
-    metric_card("First visit rate", f"{first_visit_rate:.1%}", "First visit marked Yes")
-with k5:
-    metric_card("Average child age", f"{avg_age:.1f}" if pd.notna(avg_age) else "N/A", "Years")
-
-top_camp, top_camp_count = top_category(filtered, "settlement_clean", exclude=[MISSING])
-top_site, top_site_count = top_category(filtered, "cfs_clean", exclude=[MISSING])
-top_gender, top_gender_count = top_category(filtered, "gender_clean", exclude=[MISSING])
-top_age, top_age_count = top_category(filtered, "age_group", exclude=[MISSING])
-top_issue, top_issue_count = top_category(issue_context, "issue_clean", exclude=[MISSING])
-top_support, top_support_count = top_category(support_context, "support_clean", exclude=[MISSING])
-top_game, top_game_count = top_category(filtered, "games_played_clean", exclude=[MISSING])
-top_referral_dest, top_referral_dest_count = top_category(
-    filtered[filtered["referral_made_clean"].astype("string").eq("Yes")],
-    "referral_destination_grouped",
-    exclude=[MISSING],
-)
-
-st.markdown("<div class='section-heading'>Quick Insights</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='section-subtitle'>Fast outlook for the currently filtered dataset.</div>",
-    unsafe_allow_html=True,
-)
 try:
-    quick_panel = st.container(border=True)
-except TypeError:
-    quick_panel = st.container()
-with quick_panel:
-    qi1, qi2, qi3, qi4 = st.tabs(["Coverage", "Demographics", "Protection & Support", "Engagement & Referrals"])
-    with qi1:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            insight_card("Camp with most records", top_camp, f"{top_camp_count:,} records")
-        with c2:
-            insight_card("Leading CFS / site", top_site, f"{top_site_count:,} records")
-        with c3:
-            insight_card("CFS / sites represented", f"{filtered['cfs_clean'].nunique():,}", "Filtered data")
-        with c4:
-            insight_card("Staff represented", f"{filtered['staff_clean'].nunique():,}", "Filtered data")
-    with qi2:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            insight_card("Largest gender group", top_gender, f"{top_gender_count:,} records")
-        with c2:
-            insight_card("Largest age group", top_age, f"{top_age_count:,} records")
-        with c3:
-            insight_card("Children with disability", f"{yes_count(filtered, 'disability_status_clean'):,}", f"{disability_rate:.1%} of filtered records")
-        with c4:
-            insight_card("First-time visitors", f"{yes_count(filtered, 'first_visit_clean'):,}", f"{first_visit_rate:.1%} of filtered records")
-    with qi3:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            insight_card("Most reported issue", top_issue, f"{top_issue_count:,} mentions")
-        with c2:
-            insight_card("Most common support", top_support, f"{top_support_count:,} mentions")
-        with c3:
-            insight_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count")
-        with c4:
-            insight_card("Support mentions", f"{len(support_context):,}", "Multi-response count")
-    with qi4:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            insight_card("Top activity / game", top_game, f"{top_game_count:,} records")
-        with c2:
-            insight_card("Referrals made", f"{yes_count(filtered, 'referral_made_clean'):,}", f"{referral_rate:.1%} of filtered records")
-        with c3:
-            insight_card("Top referral destination", top_referral_dest, f"{top_referral_dest_count:,} records")
-        with c4:
-            insight_card("External agency records", f"{filtered['external_referral_agency_clean'].astype('string').ne(MISSING).sum():,}", "Where agency is specified")
+    if data_path.exists():
+        modified_time = data_path.stat().st_mtime
+        source_label = f"Source file: {data_path}"
+        source_modified = time.strftime("%d %b %Y %H:%M", time.localtime(modified_time))
+        raw_count, df, issue_long, support_long, game_long = load_dashboard_data_cached(str(data_path), modified_time)
+    else:
+        st.error("No dashboard data file was found on the server.")
+        st.info(
+            "Ask the dashboard administrator to place the workbook at "
+            f"`{DEFAULT_DATA_PATH}` or set the `CFS_DATA_PATH` environment variable."
+        )
+        st.stop()
+except Exception as exc:
+    st.error(f"The dashboard data could not be loaded/prepared: {exc}")
+    st.stop()
 
-st.markdown("<div class='section-heading dashboard-section-heading'>Dashboard Section</div>", unsafe_allow_html=True)
-st.markdown("<div class='section-subtitle'>Select the analytical view you want to explore.</div>", unsafe_allow_html=True)
-section_options = [
-    "Overview",
-    "CPVs KPIs",
-    "Demographics",
-    "Games & Activities",
-    "Protection & Support",
-    "Referrals",
-    "Data Quality",
+st.caption(f"Last App modified/dataset loaded: {source_modified}")
+
+# Sidebar filters
+st.sidebar.markdown("---")
+st.sidebar.markdown("<div class='sidebar-title'>Smart Filters</div>", unsafe_allow_html=True)
+st.sidebar.caption("Filters cascade automatically: each selection updates the available options below it.")
+
+valid_dates = df["date"].dropna()
+filtered = df.copy()
+if not valid_dates.empty:
+    min_date, max_date = valid_dates.min().date(), valid_dates.max().date()
+    with st.sidebar.expander("📅 Date range", expanded=True):
+        st.markdown(
+            f"<div class='filter-meta'><span>Dataset range</span><span>{min_date:%d %b %Y} → {max_date:%d %b %Y}</span></div>",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            from_date = st.date_input("From", value=min_date, min_value=min_date, max_value=max_date, key="date_from_filter")
+        with c2:
+            to_date = st.date_input("To", value=max_date, min_value=min_date, max_value=max_date, key="date_to_filter")
+    if from_date > to_date:
+        from_date, to_date = to_date, from_date
+    filtered = filtered[filtered["date"].between(pd.to_datetime(from_date), pd.to_datetime(to_date), inclusive="both")].copy()
+    date_label = f"{from_date:%d %b %Y} to {to_date:%d %b %Y}"
+else:
+    date_label = "All available dates"
+
+st.sidebar.markdown("<div class='filter-group-title'>📍 Location Path</div>", unsafe_allow_html=True)
+selected_camp = multiselect_filter("🏕 Camp / settlement", filtered, "settlement_clean")
+filtered = filter_if_selected(filtered, "settlement_clean", selected_camp)
+selected_location = multiselect_filter("📌 Specific location", filtered, "location_clean")
+filtered = filter_if_selected(filtered, "location_clean", selected_location)
+selected_cfs = multiselect_filter("🏛 CFS / site", filtered, "cfs_clean")
+filtered = filter_if_selected(filtered, "cfs_clean", selected_cfs)
+
+st.sidebar.markdown("<div class='filter-group-title'>👥 People & Profile</div>", unsafe_allow_html=True)
+selected_staff = multiselect_filter("👤 Staff / CPV", filtered, "staff_clean")
+filtered = filter_if_selected(filtered, "staff_clean", selected_staff)
+selected_gender = multiselect_filter("⚧ Gender", filtered, "gender_clean", GENDER_ORDER)
+filtered = filter_if_selected(filtered, "gender_clean", selected_gender)
+selected_age = multiselect_filter("🎂 Age group", filtered.assign(age_group=filtered["age_group"].astype(str)), "age_group", AGE_GROUP_ORDER)
+filtered = filter_if_selected(filtered.assign(age_group=filtered["age_group"].astype(str)), "age_group", selected_age)
+selected_disability = multiselect_filter("♿ Living with disability", filtered.assign(disability_status_clean=filtered["disability_status_clean"].astype(str)), "disability_status_clean", YES_NO_ORDER)
+filtered = filter_if_selected(filtered.assign(disability_status_clean=filtered["disability_status_clean"].astype(str)), "disability_status_clean", selected_disability)
+
+st.sidebar.markdown(f"<div class='filter-result-card'><span>Filtered records</span><b>{len(filtered):,}</b></div>", unsafe_allow_html=True)
+
+ctx_cols = ["record_id", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_group"]
+issue_context = issue_long.merge(filtered[ctx_cols], on="record_id", how="inner") if not filtered.empty else issue_long.iloc[0:0]
+support_context = support_long.merge(filtered[ctx_cols], on="record_id", how="inner") if not filtered.empty else support_long.iloc[0:0]
+game_context = game_long.merge(filtered[ctx_cols], on="record_id", how="inner") if not filtered.empty else game_long.iloc[0:0]
+
+# Active filter chips
+chips = [
+    ("📅 Dates", date_label),
+    ("🏕 Camp", ", ".join(selected_camp) if selected_camp else "All camps"),
+    ("📍 Location", ", ".join(selected_location) if selected_location else "All locations"),
+    ("🏛 CFS / Site", ", ".join(selected_cfs) if selected_cfs else "All sites"),
+    ("👤 Staff", ", ".join(selected_staff) if selected_staff else "All staff"),
+    ("⚧ Gender", ", ".join(selected_gender) if selected_gender else "All genders"),
+    ("🎂 Age", ", ".join(selected_age) if selected_age else "All ages"),
+    ("♿ Disability", ", ".join(selected_disability) if selected_disability else "All statuses"),
 ]
-section = dashboard_nav(section_options)
+chips_html = "".join(f"<div class='filter-chip'><span class='chip-label'>{label}</span><span class='chip-value'>{value}</span></div>" for label, value in chips)
+st.markdown(f"<div class='record-status'>✅ Showing {len(filtered):,} records with consent given</div>", unsafe_allow_html=True)
+with st.expander("🔎 Active Filters", expanded=True):
+    st.markdown(f"<div class='filter-path-chips'>{chips_html}</div>", unsafe_allow_html=True)
 
+# KPIs
+referral_rate = filtered["referral_made_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
+first_visit_rate = filtered["first_visit_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
+disability_rate = filtered["disability_status_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
+avg_age = filtered["age_clean"].mean() if len(filtered) else None
+
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+with k1:
+    metric_card("Total CFS visits", f"{len(filtered):,}", "Filtered records", "primary")
+with k2:
+    metric_card("Referral rate", f"{referral_rate:.1%}", "Referral marked Yes", "success")
+with k3:
+    metric_card("First visit rate", f"{first_visit_rate:.1%}", "First visit marked Yes", "primary")
+with k4:
+    metric_card("Disability prevalence", f"{disability_rate:.1%}", "Children recorded as Yes", "warning")
+with k5:
+    metric_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count", "warning")
+with k6:
+    metric_card("Avg child age", f"{avg_age:.1f}" if pd.notna(avg_age) else "N/A", "Years", "neutral")
+
+section_header("Quick Insights", "Fast outlook for the currently filtered dataset.")
+qi1, qi2, qi3, qi4, qi5 = st.columns(5)
+top_camp, top_camp_count = top_category(filtered, "settlement_clean", [MISSING])
+top_site, top_site_count = top_category(filtered, "cfs_clean", [MISSING])
+top_staff, top_staff_count = top_category(filtered, "staff_clean", [MISSING])
+top_issue, top_issue_count = top_category(issue_context, "issue_clean", [MISSING])
+top_game, top_game_count = top_category(game_context, "game_clean", [MISSING])
+staff_represented = filtered.loc[~filtered["staff_clean"].astype(str).isin([MISSING, REVIEW]), "staff_clean"].nunique() if "staff_clean" in filtered.columns else 0
+with qi1:
+    insight_card("Camp with most records", top_camp, f"{top_camp_count:,} records")
+with qi2:
+    insight_card("Leading CFS / site", top_site, f"{top_site_count:,} records")
+with qi3:
+    insight_card("Staff represented", f"{staff_represented:,}", f"Top: {top_staff} ({top_staff_count:,})")
+with qi4:
+    insight_card("Most reported issue", top_issue, f"{top_issue_count:,} mentions")
+with qi5:
+    insight_card("Top game / activity", top_game, f"{top_game_count:,} records")
+
+section_header("Dashboard Section", "Select the analytical view you want to explore.")
+SECTION_OPTIONS = ["Overview", "Monthly Trends", "CPVs KPIs", "Demographics", "Games & Activities", "Protection & Support", "Referrals", "Data Quality", "Raw Data"]
+section = nav_menu(SECTION_OPTIONS)
+section_intro_card(section)
+
+# -----------------------------------------------------------------------------
+# Sections
+# -----------------------------------------------------------------------------
 if section == "Overview":
-    st.subheader("Overview")
-    st.caption("A focused landing view for the current filter path, with each topic separated into Chart, Table, and Notes.")
-    o1, o2, o3, o4 = st.columns(4)
-    with o1:
-        metric_card("CFS visits", f"{len(filtered):,}", "Current filter")
-    with o2:
-        metric_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count")
-    with o3:
-        metric_card("Support mentions", f"{len(support_context):,}", "Multi-response count")
-    with o4:
-        metric_card("Referral rate", f"{referral_rate:.1%}", "Referral marked Yes")
-
-    overview_camp_table = table_with_total(filtered, ["settlement_clean"], ["gender_clean"])
-    overview_camp_chart = count_table(filtered, ["settlement_clean", "gender_clean"])
-    render_analysis_block(
-        "Coverage: Camp Records by Gender",
-        overview_camp_table,
-        lambda: sliced_bar_chart(overview_camp_chart, "settlement_clean", "overview_camps", "Count", "settlement_clean", "gender_clean", "Overview camp records by gender", horizontal=True, height=420),
-        category_share_insight(overview_camp_chart, "settlement_clean", "camp"),
-        "overview_camp_records",
-        badges=[("Filtered", "good"), ("Top 5 default", "harmonized")],
-    )
-
-    overview_age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
-    overview_age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
-    render_analysis_block(
-        "Beneficiary Profile: Age Group by Gender",
-        overview_age_table,
-        lambda: bar_chart(overview_age_chart, "age_group", "Count", "gender_clean", "Overview age group by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER}),
-        category_share_insight(overview_age_chart, "age_group", "age group"),
-        "overview_age_group",
-        badges=[("Age order locked", "good"), ("Gender categories aligned", "harmonized")],
-    )
-
-    overview_issue_table = table_with_total(issue_context, ["issue_clean"], ["gender_clean"])
-    overview_issue_chart = count_table(issue_context, ["issue_clean", "gender_clean"])
-    render_analysis_block(
-        "Protection: Top Reported Issues",
-        overview_issue_table,
-        lambda: sliced_bar_chart(overview_issue_chart, "issue_clean", "overview_issues", "Count", "issue_clean", "gender_clean", "Overview top reported issues", horizontal=True, height=520),
-        category_share_insight(overview_issue_chart, "issue_clean", "reported issue"),
-        "overview_issue_records",
-        badges=[("Multi-response", "review"), ("Harmonized specify values", "harmonized")],
-    )
-
-    overview_game_table = table_with_total(game_context, ["game_clean"], ["gender_clean"])
-    overview_game_chart = count_table(game_context, ["game_clean", "gender_clean"])
-    render_analysis_block(
-        "Activities & Referrals: Top Games / Activities",
-        overview_game_table,
-        lambda: sliced_bar_chart(overview_game_chart, "game_clean", "overview_games", "Count", "game_clean", "gender_clean", "Overview top games and activities", horizontal=True, height=520),
-        category_share_insight(overview_game_chart, "game_clean", "game or activity"),
-        "overview_game_records",
-        badges=[("Take 5 harmonized", "harmonized"), ("Chart limited only", "good")],
-    )
-
-if section == "CPVs KPIs":
-    staff_table = table_with_total(filtered, ["staff_clean"], ["gender_clean"])
-    staff_table = add_interview_date_columns(staff_table, filtered, "staff_clean", "date")
-    staff_chart = count_table(filtered, ["staff_clean", "gender_clean"])
-    render_analysis_block(
-        "CPV / Staff Data Submission",
-        staff_table,
-        lambda: sliced_bar_chart(staff_chart, "staff_clean", "staff", "Count", "staff_clean", "gender_clean", "Top staff filling forms by gender", horizontal=True, height=680, default=15),
-        "Staff names are harmonized dynamically using exact mappings and fuzzy similarity so spelling variations are grouped together. First and latest interview dates are shown in the table after Total.",
-        "staff_submission",
-        badges=[("First/latest dates", "good"), ("Staff harmonized", "harmonized")],
-    )
+    st.caption("Records where consent was 'No' are excluded from all dashboard analytics.")
 
     st.divider()
-    site_table = table_with_total(filtered, ["settlement_clean", "location_clean", "cfs_clean"], ["gender_clean"])
-    site_chart = count_table(filtered, ["cfs_clean", "gender_clean"])
-    render_analysis_block(
-        "Camp, Location & CFS Distribution",
-        site_table,
-        lambda: sliced_bar_chart(site_chart, "cfs_clean", "site_distribution", "Count", "cfs_clean", "gender_clean", "CFS / site records by gender", horizontal=True, height=600, default=15),
-        category_share_insight(site_chart, "cfs_clean", "CFS / site"),
-        "site_distribution",
-        badges=[("Linked location filters", "good"), ("Chart limited only", "harmonized")],
-    )
-
-if section == "Demographics":
-    first_visit_records = filtered[filtered["first_visit_clean"].astype("string").isin(["Yes", "No"])].copy()
-    first_visit_records["first_visit_clean"] = pd.Categorical(first_visit_records["first_visit_clean"].astype("string"), categories=["Yes", "No"], ordered=True)
-    first_visit_pie = count_table(first_visit_records, ["first_visit_clean"])
-    first_visit_overall_table = add_grand_total_row(first_visit_pie, "first_visit_clean")
-    render_analysis_block(
-        "First Visit to CFS: Overall Split",
-        first_visit_overall_table,
-        lambda: pie_chart(first_visit_pie, "first_visit_clean", "Count", "Overall first visit split"),
-        category_share_insight(first_visit_pie, "first_visit_clean", "first-visit response"),
-        "first_visit_overall",
-        simple=True,
-        badges=[("Yes/No view", "good")],
-    )
+    st.subheader("Coverage: Camp Records by Gender")
+    camp_table = table_with_total(filtered, ["settlement_clean"], ["gender_clean"])
+    render_table(camp_table, "Camp Records by Gender", "overview_camp")
+    camp_chart = count_table(filtered, ["settlement_clean", "gender_clean"])
+    camp_chart = add_top_n_control(camp_chart, "settlement_clean", "overview_camp", default=5)
+    bar_chart(camp_chart, "Count", "settlement_clean", "gender_clean", "Overview: camp records by gender", horizontal=True, height=420)
 
     st.divider()
-    first_visit_gender_table = table_with_total(first_visit_records, ["first_visit_clean"], ["gender_clean"])
-    first_visit_gender_chart = count_table(first_visit_records, ["first_visit_clean", "gender_clean"])
-    render_analysis_block(
-        "First Visit to CFS by Gender",
-        first_visit_gender_table,
-        lambda: bar_chart(
-            first_visit_gender_chart,
-            "Count",
-            "first_visit_clean",
-            "gender_clean",
-            "First visit to CFS by gender",
-            horizontal=True,
-            height=360,
-            category_orders={"gender_clean": GENDER_ORDER},
-        ),
-        "This view keeps the Yes and No first-visit responses and splits each by the standardized gender categories.",
-        "first_visit_gender",
-        badges=[("Gender aligned", "harmonized")],
-    )
-
-    st.divider()
-    first_visit_table = table_with_total(first_visit_records, ["cfs_clean"], ["first_visit_clean", "gender_clean"])
-    first_visit_chart = count_table(first_visit_records, ["cfs_clean", "first_visit_clean"])
-    render_analysis_block(
-        "First Visit to CFS by Site",
-        first_visit_table,
-        lambda: sliced_bar_chart(
-            first_visit_chart,
-            "cfs_clean",
-            "first_visit_site",
-            "Count",
-            "cfs_clean",
-            "first_visit_clean",
-            "First visit to CFS by site",
-            horizontal=True,
-            height=620,
-            category_orders={"first_visit_clean": ["Yes", "No"]},
-            default=15,
-        ),
-        "The site table keeps CFS / site as the row field, with Yes and No as the top-level columns. Missing first-visit responses are excluded from this specific Yes/No view.",
-        "first_visit_site",
-        badges=[("CFS site rows", "good"), ("Missing excluded", "review")],
-    )
-
-    st.divider()
-    gender_cfs_table = table_with_total(filtered, ["cfs_clean"], ["gender_clean"])
-    gender_cfs_chart = count_table(filtered, ["cfs_clean", "gender_clean"])
-    render_analysis_block(
-        "Gender by CFS",
-        gender_cfs_table,
-        lambda: sliced_bar_chart(gender_cfs_chart, "cfs_clean", "gender_cfs", "Count", "cfs_clean", "gender_clean", "Gender by CFS / site", horizontal=True, height=640, default=15),
-        category_share_insight(gender_cfs_chart, "cfs_clean", "CFS / site"),
-        "gender_by_cfs",
-        badges=[("Girls / Boys / Transgender", "harmonized")],
-    )
-
-    st.divider()
+    st.subheader("Beneficiary Profile: Age Group by Gender")
     age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
+    render_table(age_table, "Age Group by Gender", "overview_age")
     age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
-    render_analysis_block(
-        "Age Group Breakdown by Gender",
-        age_table,
-        lambda: bar_chart(age_chart, "age_group", "Count", "gender_clean", "Overall age group distribution by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER}),
-        "Age groups are fixed in child-development order: 0-5 years, 6-12 years, then 13-17 years.",
-        "age_group_overall",
-        badges=[("Age order locked", "good")],
-    )
+    bar_chart(age_chart, "age_group", "Count", "gender_clean", "Overview: age group by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
 
     st.divider()
-    age_cfs_table = table_with_total(filtered, ["cfs_clean"], ["age_group", "gender_clean"])
-    age_cfs_chart = count_table(filtered, ["cfs_clean", "age_group"])
-    render_analysis_block(
-        "Age Group Breakdown by CFS & Gender",
-        age_cfs_table,
-        lambda: sliced_bar_chart(age_cfs_chart, "cfs_clean", "age_group_cfs_chart", "Count", "cfs_clean", "age_group", "Age group by CFS / site", horizontal=True, height=640, category_orders={"age_group": AGE_GROUP_ORDER}, default=15),
-        "This detailed table shows the CFS-level age and gender breakdown. The chart summarizes age group distribution by CFS while the table carries the full gender detail.",
-        "age_group_cfs_gender",
-        badges=[("Detailed table", "good")],
-    )
-
-if section == "Protection & Support":
-    disability_table = table_with_total(filtered, ["disability_status_clean"], ["gender_clean"])
-    disability_chart = count_table(filtered, ["disability_status_clean", "gender_clean"])
-    render_analysis_block(
-        "Disability Prevalence",
-        disability_table,
-        lambda: bar_chart(disability_chart, "Count", "disability_status_clean", "gender_clean", "Disability prevalence by gender", horizontal=True, height=360),
-        category_share_insight(disability_chart, "disability_status_clean", "disability status"),
-        "disability_prevalence",
-        badges=[("Yes/No view", "good")],
-    )
-
-    st.divider()
-    disability_yes = filtered[filtered["disability_status_clean"].astype("string").eq("Yes")].copy()
-    disability_type_table = table_with_total(disability_yes[~disability_yes["disability_type_display"].isin([MISSING])], ["disability_type_display"], ["gender_clean"])
-    disability_chart_source = disability_yes[~disability_yes["disability_type_display"].isin([MISSING])].copy()
-    disability_chart_source["disability_type_display"] = disability_chart_source["disability_type_display"].map(shorten_disability_type)
-    disability_types = count_table(disability_chart_source, ["disability_type_display", "gender_clean"])
-    render_analysis_block(
-        "Disability Types",
-        disability_type_table,
-        lambda: sliced_bar_chart(disability_types, "disability_type_display", "disability_types", "Count", "disability_type_display", "gender_clean", "Disability types by gender", horizontal=True, height=480, default=10),
-        "Long disability type descriptions are shortened only for display. The original workbook values remain available in the exported cleaned data.",
-        "disability_types",
-        badges=[("Readable chart labels", "harmonized")],
-    )
-
-    st.divider()
+    st.subheader("Protection: Top Reported Issues")
     issue_table = table_with_total(issue_context, ["issue_clean"], ["gender_clean"])
+    render_table(issue_table, "Top Issues by Gender", "overview_issues")
     issue_chart = count_table(issue_context, ["issue_clean", "gender_clean"])
-    render_analysis_block(
-        "Nature of Issues Reported",
-        issue_table,
-        lambda: sliced_bar_chart(issue_chart, "issue_clean", "issues", "Count", "issue_clean", "gender_clean", "Issues reported by gender", horizontal=True, height=720, default=15),
-        category_share_insight(issue_chart, "issue_clean", "reported issue") + " Other/specify issue entries are harmonized into categories such as Take 5, Play / child engagement, Medical concern and GBV.",
-        "nature_issues",
-        badges=[("Multi-response", "review"), ("Specify harmonized", "harmonized")],
-    )
-    issue_distribution, issue_combinations = multi_response_tables(issue_context, "issue_clean", "Issue")
-    st.markdown("#### Multiple issues per child / record")
-    issue_dist_col, issue_combo_col = st.columns([1, 1.8])
-    with issue_dist_col:
-        render_table(issue_distribution, "issue_selection_distribution", "Issue Selection Count per Child / Record", simple=True)
-    with issue_combo_col:
-        render_table(issue_combinations, "issue_combinations", "Most Common Issue Combinations", simple=True)
-    st.markdown("#### Issues Captured by CPV / Staff")
-    issue_staff_table = table_with_total(issue_context, ["staff_clean"], ["issue_clean"])
-    render_table(issue_staff_table, "issues_by_cpv_staff", "Issues Captured by CPV / Staff")
+    issue_chart = add_top_n_control(issue_chart, "issue_clean", "overview_issues", default=10)
+    bar_chart(issue_chart, "Count", "issue_clean", "gender_clean", "Overview: top issues by gender", horizontal=True, height=540)
+
+elif section == "Monthly Trends":
+    st.subheader("Monthly Visit Trends")
+    monthly = filtered.dropna(subset=["date"]).copy()
+    if monthly.empty:
+        st.info("No dated records available for the current filters.")
+    else:
+        monthly["month_label"] = monthly["date"].dt.to_period("M").astype(str)
+        monthly["Month"] = monthly["date"].dt.strftime("%b %Y")
+        vpm = monthly.groupby(["month_label", "Month"], observed=False).size().rename("Visits").reset_index().sort_values("month_label")
+        line_chart(vpm, "Month", "Visits", title="Total CFS visits per month")
+
+        gm = monthly.groupby(["month_label", "Month", "gender_clean"], observed=False).size().rename("Visits").reset_index().sort_values("month_label")
+        gm = gm[gm["Visits"] > 0]
+        line_chart(gm, "Month", "Visits", color="gender_clean", title="CFS visits by gender per month")
+
+        summary = monthly.groupby(["month_label", "Month"], observed=False).agg(
+            Total_Visits=("record_id", "count"),
+            Girls=("gender_clean", lambda s: s.astype(str).eq("Girls").sum()),
+            Boys=("gender_clean", lambda s: s.astype(str).eq("Boys").sum()),
+            First_Visit_Yes=("first_visit_clean", lambda s: s.astype(str).eq("Yes").sum()),
+            Referrals_Yes=("referral_made_clean", lambda s: s.astype(str).eq("Yes").sum()),
+            Avg_Age=("age_clean", "mean"),
+        ).reset_index().sort_values("month_label")
+        summary["First Visit Rate %"] = (summary["First_Visit_Yes"] / summary["Total_Visits"] * 100).round(1)
+        summary["Referral Rate %"] = (summary["Referrals_Yes"] / summary["Total_Visits"] * 100).round(1)
+        summary["Avg_Age"] = summary["Avg_Age"].round(1)
+        summary = summary.drop(columns=["month_label"]).rename(columns={"Total_Visits": "Total Visits", "First_Visit_Yes": "First-Visit Children", "Referrals_Yes": "Referrals Made", "Avg_Age": "Avg Age (yrs)"}).set_index("Month")
+        summary.loc["Grand Total", ["Total Visits", "Girls", "Boys", "First-Visit Children", "Referrals Made"]] = summary[["Total Visits", "Girls", "Boys", "First-Visit Children", "Referrals Made"]].sum()
+        render_table(summary, "Monthly Trends Summary", "monthly_summary", precision=1)
+
+elif section == "CPVs KPIs":
+    st.subheader("CPV / Staff Performance Summary")
+    cpv = filtered.groupby("staff_clean", observed=False).agg(
+        Records=("record_id", "count"),
+        First_Visit_Yes=("first_visit_clean", lambda s: s.astype(str).eq("Yes").sum()),
+        Referrals_Yes=("referral_made_clean", lambda s: s.astype(str).eq("Yes").sum()),
+        Disability_Yes=("disability_status_clean", lambda s: s.astype(str).eq("Yes").sum()),
+        Unique_CFS=("cfs_clean", "nunique"),
+        First_Date=("date", "min"),
+        Last_Date=("date", "max"),
+    ).reset_index().sort_values("Records", ascending=False)
+    if not cpv.empty:
+        cpv["First Visit Rate %"] = (cpv["First_Visit_Yes"] / cpv["Records"] * 100).round(1)
+        cpv["Referral Rate %"] = (cpv["Referrals_Yes"] / cpv["Records"] * 100).round(1)
+        cpv["First_Date"] = pd.to_datetime(cpv["First_Date"], errors="coerce").dt.strftime("%d %b %Y").fillna("")
+        cpv["Last_Date"] = pd.to_datetime(cpv["Last_Date"], errors="coerce").dt.strftime("%d %b %Y").fillna("")
+    render_table(cpv.rename(columns={"staff_clean": "Staff / CPV", "First_Visit_Yes": "First Visits", "Referrals_Yes": "Referrals", "Disability_Yes": "Disability Count", "Unique_CFS": "Unique CFS", "First_Date": "First Date", "Last_Date": "Last Date"}), "CPV Performance Summary", "cpv_summary", precision=1)
+    staff_chart = count_table(filtered, ["staff_clean", "gender_clean"])
+    staff_chart = add_top_n_control(staff_chart, "staff_clean", "staff_chart", default=15)
+    bar_chart(staff_chart, "Count", "staff_clean", "gender_clean", "Staff submissions by gender", horizontal=True, height=700)
+
+elif section == "Demographics":
+    st.subheader("Demographics")
+    fvr = filtered[filtered["first_visit_clean"].astype(str).isin(["Yes", "No"])].copy()
+    if not fvr.empty:
+        fvr["visit_type"] = fvr["first_visit_clean"].astype(str).map({"Yes": "First visit", "No": "Repeat visit"})
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        visit_split = count_table(fvr, ["visit_type"]) if "visit_type" in fvr.columns else pd.DataFrame(columns=["visit_type", "Count"])
+        pie_chart(visit_split, "visit_type", "Count", "First vs repeat visit split")
+    with c2:
+        pie_chart(count_table(filtered, ["gender_clean"]), "gender_clean", "Count", "Overall gender split")
 
     st.divider()
-    support_table = table_with_total(support_context, ["support_clean"], ["gender_clean"])
-    support_chart = count_table(support_context, ["support_clean", "gender_clean"])
-    render_analysis_block(
-        "Support Offered",
-        support_table,
-        lambda: bar_chart(support_chart, "Count", "support_clean", "gender_clean", "Support offered by gender", horizontal=True, height=420),
-        category_share_insight(support_chart, "support_clean", "support type"),
-        "support_offered",
-        badges=[("Multi-response", "review")],
-    )
-    support_distribution, support_combinations = multi_response_tables(support_context, "support_clean", "Support")
-    st.markdown("#### Multiple support types per child / record")
-    support_dist_col, support_combo_col = st.columns([1, 1.8])
-    with support_dist_col:
-        render_table(support_distribution, "support_selection_distribution", "Support Selection Count per Child / Record", simple=True)
-    with support_combo_col:
-        render_table(support_combinations, "support_combinations", "Most Common Support Combinations", simple=True)
-
-if section == "Games & Activities":
-    games_table = table_with_total(game_context, ["game_clean"], ["gender_clean"])
-    games_chart = count_table(game_context, ["game_clean", "gender_clean"])
-    render_analysis_block(
-        "Games / Activities Engagement",
-        games_table,
-        lambda: sliced_bar_chart(games_chart, "game_clean", "games", "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680, default=15),
-        category_share_insight(games_chart, "game_clean", "game or activity") + " Take5 variants and Take 5 routine values are grouped under Take 5.",
-        "games_activities",
-        badges=[("Take 5 harmonized", "harmonized"), ("Chart limited only", "good")],
-    )
-    game_distribution, game_combinations = multi_response_tables(game_context, "game_clean", "Game / activity")
-    st.markdown("#### Multiple games / activities per child / record")
-    game_dist_col, game_combo_col = st.columns([1, 1.8])
-    with game_dist_col:
-        render_table(game_distribution, "game_selection_distribution", "Game / Activity Selection Count per Child / Record", simple=True)
-    with game_combo_col:
-        render_table(game_combinations, "game_combinations", "Most Common Game / Activity Combinations", simple=True)
-
-if section == "Referrals":
-    referrals = filtered[filtered["referral_made_clean"].astype("string").eq("Yes")].copy()
-    referral_dest = referrals[referrals["referral_destination_grouped"].isin(["PSS", "Case Management", "Empowerment", "External referrals"])]
-    referral_table = table_with_total(referral_dest, ["referral_destination_grouped"], ["gender_clean"])
-    referral_chart = count_table(referral_dest, ["referral_destination_grouped", "gender_clean"])
-    render_analysis_block(
-        "Referral Destination If Yes",
-        referral_table,
-        lambda: bar_chart(
-            referral_chart,
-            "Count",
-            "referral_destination_grouped",
-            "gender_clean",
-            "Referral destination by gender",
-            horizontal=True,
-            height=420,
-        ),
-        category_share_insight(referral_chart, "referral_destination_grouped", "referral destination") + " External referral partners are intentionally excluded here and shown in the agency breakdown.",
-        "referral_destination",
-        badges=[("Four destination groups", "good")],
-    )
+    st.subheader("First Visit and Repeat Visit Summary")
+    st.caption("This table distinguishes children visiting the CFS for the first time from repeat visitors. Missing first-visit responses are excluded from this view.")
+    render_table(table_with_total(fvr, ["visit_type"], ["gender_clean"]), "First Visit and Repeat Visit by Gender", "first_repeat_gender")
 
     st.divider()
-    external = referrals[
-        referrals["referral_destination_grouped"].eq("External referrals")
-        & ~referrals["external_referral_agency_clean"].isin([MISSING, "Unknown", REVIEW])
+    st.subheader("First Visit and Repeat Visit by CFS / Site")
+    render_table(table_with_total(fvr, ["cfs_clean"], ["visit_type", "gender_clean"]), "First Visit and Repeat Visit by CFS Site", "first_repeat_site")
+    fv_chart = count_table(fvr, ["cfs_clean", "visit_type"])
+    fv_chart = add_top_n_control(fv_chart, "cfs_clean", "first_repeat_site_chart", default=15)
+    bar_chart(fv_chart, "Count", "cfs_clean", "visit_type", "First and repeat visits by CFS / site", horizontal=True, height=620)
+
+    st.divider()
+    st.subheader("Age Group Breakdown by Gender")
+    render_table(table_with_total(filtered, ["age_group"], ["gender_clean"]), "Age Group by Gender", "age_gender")
+    achart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
+    bar_chart(achart, "age_group", "Count", "gender_clean", "Age group distribution by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
+
+elif section == "Games & Activities":
+    st.subheader("Games / Activities Engagement")
+    render_table(table_with_total(game_context, ["game_clean"], ["gender_clean"]), "Games Activities by Gender", "games")
+    gchart = count_table(game_context, ["game_clean", "gender_clean"])
+    gchart = add_top_n_control(gchart, "game_clean", "games_chart", default=15)
+    bar_chart(gchart, "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680)
+
+    st.divider()
+    st.subheader("Multiple Games / Activities per Child")
+    st.caption("Activity totals are multi-response mention counts. The tables below show both Records and Total mentions so they reconcile with the Games / Activities totals.")
+    game_dist, game_combos = multi_response_tables(game_context, "game_clean", "Game / activity")
+    gdist_col, gcombo_col = st.columns([1, 1.8])
+    with gdist_col:
+        render_table(game_dist, "Game Activity Selection Count", "game_selection_count")
+    with gcombo_col:
+        render_table(game_combos, "Most Common Game Activity Combinations", "game_combinations")
+
+elif section == "Protection & Support":
+    st.subheader("Disability Prevalence")
+    render_table(table_with_total(filtered, ["disability_status_clean"], ["gender_clean"]), "Disability Prevalence", "disability")
+    dchart = count_table(filtered, ["disability_status_clean", "gender_clean"])
+    bar_chart(dchart, "Count", "disability_status_clean", "gender_clean", "Disability prevalence by gender", horizontal=True, height=360)
+
+    st.divider()
+    st.subheader("Type of Disability")
+    st.caption("This view is limited to children recorded as living with a disability. Missing disability-type entries are excluded from the analytical table and chart, but remain visible through Data Quality completeness checks.")
+    disability_yes = filtered[filtered["disability_status_clean"].astype(str).eq("Yes")].copy()
+    disability_type_data = disability_yes[
+        disability_yes["disability_type_display"].notna()
+        & disability_yes["disability_type_display"].astype(str).str.strip().ne("")
+        & ~disability_yes["disability_type_display"].astype(str).isin([MISSING, REVIEW])
     ].copy()
-    external_table = table_with_total(external, ["external_referral_agency_clean"], ["gender_clean"])
-    external_chart = count_table(external, ["external_referral_agency_clean", "gender_clean"])
-    render_analysis_block(
-        "External Referral Agency Breakdown",
-        external_table,
-        lambda: sliced_bar_chart(external_chart, "external_referral_agency_clean", "external_agency", "Count", "external_referral_agency_clean", "gender_clean", "External referral agencies by gender", horizontal=True, height=600, default=15),
-        category_share_insight(external_chart, "external_referral_agency_clean", "external agency"),
-        "external_referral_agencies",
-        badges=[("Agency names harmonized", "harmonized"), ("Unknown removed", "review")],
+    render_table(
+        table_with_total(disability_type_data, ["disability_type_display"], ["gender_clean"]),
+        "Type of Disability by Gender",
+        "disability_type_gender",
+    )
+    disability_type_chart = count_table(disability_type_data, ["disability_type_display", "gender_clean"])
+    disability_type_chart = add_top_n_control(disability_type_chart, "disability_type_display", "disability_type_chart", default=10)
+    bar_chart(
+        disability_type_chart,
+        "Count",
+        "disability_type_display",
+        "gender_clean",
+        "Type of disability by gender",
+        horizontal=True,
+        height=500,
     )
 
-if section == "Data Quality":
-    st.subheader("Data Quality & Harmonization Review")
+    st.divider()
+    st.subheader("Nature of Issues Reported")
+    render_table(table_with_total(issue_context, ["issue_clean"], ["gender_clean"]), "Issues Reported by Gender", "issues")
+    ichart = count_table(issue_context, ["issue_clean", "gender_clean"])
+    ichart = add_top_n_control(ichart, "issue_clean", "issues_chart", default=15)
+    bar_chart(ichart, "Count", "issue_clean", "gender_clean", "Issues reported by gender", horizontal=True, height=720)
+
+    st.divider()
+    st.subheader("Multiple Issues per Child / Record")
+    st.caption("Issue totals are multi-response mention counts. The tables below show both Records and Total mentions so they reconcile with the Nature of Issues Reported totals.")
+    issue_dist, issue_combos = multi_response_tables(issue_context, "issue_clean", "Issue")
+    idist_col, icombo_col = st.columns([1, 1.8])
+    with idist_col:
+        render_table(issue_dist, "Issue Selection Count", "issue_selection_count")
+    with icombo_col:
+        render_table(issue_combos, "Most Common Issue Combinations", "issue_combinations")
+
+    st.divider()
+    st.subheader("Support Offered")
+    render_table(table_with_total(support_context, ["support_clean"], ["gender_clean"]), "Support Offered by Gender", "support")
+    schart = count_table(support_context, ["support_clean", "gender_clean"])
+    bar_chart(schart, "Count", "support_clean", "gender_clean", "Support offered by gender", horizontal=True, height=420)
+
+elif section == "Referrals":
+    st.subheader("Referral Rate by CFS / Site")
+    rrs = filtered.groupby("cfs_clean", observed=False).agg(Total_Records=("record_id", "count"), Referrals_Yes=("referral_made_clean", lambda s: s.astype(str).eq("Yes").sum())).reset_index()
+    if not rrs.empty:
+        rrs["Referrals_No"] = rrs["Total_Records"] - rrs["Referrals_Yes"]
+        rrs["Referral Rate %"] = (rrs["Referrals_Yes"] / rrs["Total_Records"] * 100).round(1)
+        rrs = rrs.sort_values("Referral Rate %", ascending=True)
+    bar_chart(rrs.rename(columns={"Referral Rate %": "Count"}), "Count", "cfs_clean", title="Referral Rate (%) by CFS / Site", horizontal=True, height=max(360, len(rrs) * 34 + 100))
+    render_table(rrs.rename(columns={"cfs_clean": "CFS / Site", "Total_Records": "Total Records", "Referrals_Yes": "Referrals Yes", "Referrals_No": "Referrals No"}), "Referral Rate by CFS Site", "referral_rate", precision=1)
+
+    st.divider()
+    st.subheader("Referral Destination")
+    referrals = filtered[filtered["referral_made_clean"].astype(str).eq("Yes")].copy()
+    render_table(table_with_total(referrals, ["referral_destination_grouped"], ["gender_clean"]), "Referral Destination by Gender", "ref_dest")
+    rdchart = count_table(referrals, ["referral_destination_grouped", "gender_clean"])
+    bar_chart(rdchart, "Count", "referral_destination_grouped", "gender_clean", "Referral destination by gender", horizontal=True, height=420)
+
+    st.divider()
+    st.subheader("External Referral Agencies")
+    ext = referrals[~referrals["external_referral_agency_clean"].astype(str).isin([MISSING, "Unknown", REVIEW])].copy()
+    render_table(table_with_total(ext, ["external_referral_agency_clean"], ["gender_clean"]), "External Referral Agencies by Gender", "ext_agencies")
+
+elif section == "Data Quality":
+    st.subheader("Data Quality & Harmonisation Review")
+    st.info("Records where consent was 'No' are excluded because they typically contain skipped form fields.")
     q1, q2, q3, q4 = st.columns(4)
     with q1:
-        metric_card("Missing location", f"{filtered['location_clean'].eq(MISSING).sum():,}")
+        metric_card("Missing location", f"{filtered['location_clean'].astype(str).eq(MISSING).sum():,}", tone="danger")
     with q2:
-        metric_card("Missing CFS / site", f"{filtered['cfs_clean'].eq(MISSING).sum():,}")
+        metric_card("Missing CFS / site", f"{filtered['cfs_clean'].astype(str).eq(MISSING).sum():,}", tone="danger")
     with q3:
-        metric_card("Missing age", f"{filtered['age_clean'].isna().sum():,}")
+        metric_card("Missing age", f"{filtered['age_clean'].isna().sum():,}", tone="warning")
     with q4:
-        metric_card("Issue Other harmonized", f"{filtered['issue_other_specify'].notna().sum():,}")
+        metric_card("Raw records loaded", f"{raw_count:,}", tone="primary")
 
-    staff_review = (
-        filtered.groupby(["staff_filling_form", "staff_clean"], dropna=False, observed=False)
-        .size()
-        .reset_index(name="Count")
-        .sort_values("Count", ascending=False)
-    )
-    staff_review = top_n_with_total(staff_review, 80, "staff_filling_form")
-    staff_review_chart = staff_review[staff_review["staff_filling_form"].astype("string").ne("Grand Total")].head(20).copy()
-    render_analysis_block(
-        "Harmonized Staff Name Review",
-        staff_review,
-        lambda: bar_chart(staff_review_chart, "Count", "staff_clean", title="Top harmonized staff names", horizontal=True, height=560),
-        "This review shows the raw staff entry beside the cleaned staff name, making spelling corrections auditable.",
-        "staff_harmonization_review",
-        simple=True,
-        badges=[("Harmonized", "harmonized")],
-    )
+    fields = [
+        ("Child name", "child_name"),
+        ("Gender", "gender_clean"),
+        ("Age", "age_clean"),
+        ("Disability status", "disability_status_clean"),
+        ("First visit", "first_visit_clean"),
+        ("Referral made", "referral_made_clean"),
+        ("Settlement / camp", "settlement_clean"),
+        ("Location", "location_clean"),
+        ("CFS / site", "cfs_clean"),
+        ("Games played", "games_played_clean"),
+        ("Staff", "staff_clean"),
+    ]
+    rows = []
+    total = len(filtered)
+    for label, col in fields:
+        filled = int((filtered[col].notna() & filtered[col].astype(str).ne("") & filtered[col].astype(str).ne(MISSING)).sum()) if col in filtered.columns else 0
+        rows.append({"Field": label, "Records Filled": filled, "Total Records": total, "Completeness %": round(filled / total * 100, 1) if total else 0})
+    completeness = pd.DataFrame(rows).sort_values("Completeness %")
+    fig = px.bar(completeness, x="Completeness %", y="Field", orientation="h", title="Field Completeness (%)", text="Completeness %", color="Completeness %", color_continuous_scale=[(0, "#dc2626"), (0.6, "#f59e0b"), (0.8, "#16a34a"), (1, "#15803d")], range_color=[0, 100])
+    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside", cliponaxis=False)
+    fig.update_layout(height=max(360, len(completeness) * 38 + 90), margin=dict(l=12, r=24, t=58, b=18), plot_bgcolor="white", paper_bgcolor="white", coloraxis_showscale=False, title_font=dict(size=18, color="#172554"), font=dict(size=13, color="#111827"))
+    fig.update_xaxes(range=[0, 105], showgrid=True, gridcolor="#e9eef5", zeroline=False)
+    fig.update_yaxes(showgrid=False, zeroline=False)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
+    render_table(completeness.set_index("Field"), "Field Completeness Summary", "completeness", precision=1)
 
-    st.divider()
-    issue_review = (
-        filtered[filtered["issue_other_specify"].notna()]
-        .groupby(["issue_other_specify", "issue_other_specify_clean"], dropna=False, observed=False)
-        .size()
-        .reset_index(name="Count")
-        .sort_values("Count", ascending=False)
-    )
-    issue_review = top_n_with_total(issue_review, 80, "issue_other_specify")
-    issue_review_chart = issue_review[issue_review["issue_other_specify"].astype("string").ne("Grand Total")].head(20).copy()
-    render_analysis_block(
-        "Other Issue Specification Review",
-        issue_review,
-        lambda: bar_chart(issue_review_chart, "Count", "issue_other_specify_clean", title="Top harmonized issue specifications", horizontal=True, height=560),
-        "This review makes the Other/specify harmonization transparent, including Take 5 and protection-related recoding.",
-        "issue_other_review",
-        simple=True,
-        badges=[("Specify harmonized", "harmonized")],
-    )
+elif section == "Raw Data":
+    st.subheader("Filtered Raw Data")
+    display_cols = [
+        "record_id", "date", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_clean", "age_group", "disability_status_clean", "first_visit_clean", "referral_made_clean", "issues_combined", "support_combined", "games_played_clean",
+    ]
+    display_cols = [c for c in display_cols if c in filtered.columns]
+    st.dataframe(filtered[display_cols], use_container_width=True, hide_index=True)
+    st.download_button("⬇ Download filtered raw data CSV", filtered.to_csv(index=False).encode("utf-8"), file_name="filtered_cfs_data.csv", mime="text/csv", use_container_width=True)
 
-    st.divider()
-    disability_review = (
-        filtered[filtered["disability_type"].notna()]
-        .groupby(["disability_type", "disability_type_display"], dropna=False, observed=False)
-        .size()
-        .reset_index(name="Count")
-        .sort_values("Count", ascending=False)
-    )
-    disability_review = add_grand_total_row(disability_review, "disability_type")
-    disability_review_chart = disability_review[disability_review["disability_type"].astype("string").ne("Grand Total")].head(20).copy()
-    render_analysis_block(
-        "Disability Display Label Review",
-        disability_review,
-        lambda: bar_chart(disability_review_chart, "Count", "disability_type_display", title="Top disability display labels", horizontal=True, height=520),
-        "This review confirms long disability descriptions are shortened for readability without changing the underlying workbook values.",
-        "disability_label_review",
-        simple=True,
-        badges=[("Readable labels", "harmonized")],
-    )
+
+# Footer
+render_app_footer()
