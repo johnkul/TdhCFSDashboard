@@ -43,16 +43,37 @@ DEVELOPER_LOGO_PATH = BASE_DIR / "assets" / "developer-logo.png"
 CSS_PATH = BASE_DIR / "assets" / "styles.css"
 APP_VERSION = "Version 1.0 · June 2026"
 PREPARED_CACHE_PATH = BASE_DIR / ".cfs_dashboard_prepared_cache.pkl"
-PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v2"
+PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v9"
 
 RAW_TO_TRANSFORMED_COLUMNS = {
+    # System / metadata columns
+    "today": "today",
+    "username": "username",
+    "deviceid": "deviceid",
+    "phonenumber": "phonenumber",
+    "Thank you for visiting the Tdh Child-Friendly Space. We keep a record of our conversations so that we can provide you with the best possible service. We also use this information to improve our services and to report to our donors. Your information will be kept confidential and will not be shared with anyone outside of Tdh without your permission.": "information_statement",
+    "THANK YOU FOR PARTICIPATING.": "end_note",
+    "Location of the information seeker.": "gps_location",
+    "_id": "_id",
+    "_uuid": "_uuid",
+    "_submission_time": "submission_time",
+    "_validation_status": "validation_status",
+    "_notes": "notes",
+    "_status": "status",
+    "_submitted_by": "submitted_by",
+    "__version__": "version",
+    "_tags": "tags",
+    "meta/rootUuid": "root_uuid",
+    "_index": "index",
+
+    # Core survey fields
     "Do you consent to participate?": "consent",
     "Staff filling the form": "staff_filling_form",
     "Enter a date": "date",
     "Name of the Child (two names only)": "child_name",
     "Age of the child.": "child_age",
-    "How does the child seeking information identify. ": "child_gender",
     "How does the child seeking information identify.": "child_gender",
+    "How does the child seeking information identify. ": "child_gender",
     "Is the child living with disability?": "child_living_with_disability",
     "What type of disability?": "disability_type",
     "If Other, please specify the type of disability.": "disability_type_other",
@@ -68,7 +89,14 @@ RAW_TO_TRANSFORMED_COLUMNS = {
     "Name of the CFS the information seeker visited.": "cfs_visited",
     "Which games did the child play/was engaged with?": "games_played",
     "If other, specify the type of game involved.": "game_other_specify",
+    "Was Take 5 activities integrated into play sessions?": "take5_activities_integrated",
     "Is this your first visit to any of Tdh`s CFS": "first_visit_tdh_cfs",
+    "Is this your first visit to any of Tdh's CFS": "first_visit_tdh_cfs",
+    "Is this your first visit to any of Tdh’s CFS": "first_visit_tdh_cfs",
+    "Is this your first visit to any of Tdh CFS": "first_visit_tdh_cfs",
+    "Is this your first visit to any of Tdh CFS?": "first_visit_tdh_cfs",
+
+    # Issues
     "Nature of Issues Reported": "nature_issues_reported_text",
     "Nature of Issues Reported/New arrival/Lack of card": "issue_new_arrival_lack_of_card",
     "Nature of Issues Reported/Disability": "issue_disability",
@@ -88,6 +116,8 @@ RAW_TO_TRANSFORMED_COLUMNS = {
     "Nature of Issues Reported/None": "issue_none",
     "Nature of Issues Reported/Other": "issue_other",
     "If Other, specify": "issue_other_specify",
+
+    # Support / referral
     "Support offered": "support_offered_text",
     "Support offered/Psychological First Aid": "support_psychological_first_aid",
     "Support offered/Play and art therapy": "support_play_art_therapy",
@@ -130,6 +160,18 @@ SUPPORT_COLUMNS = {
     "support_psychoeducation": "Psychoeducation",
     "support_none": "None",
 }
+
+CORE_ANALYSIS_COLUMNS = [
+    "consent", "staff_filling_form", "date", "child_name", "child_age", "child_gender",
+    "child_living_with_disability", "disability_type", "disability_type_other",
+    "camp_of_information_seeking", "specific_camp_location", "section_block_residence",
+    "camp_location_alt", "exact_registered_location", "child_friendly_space_visited", "cfs_visited",
+    "games_played", "game_other_specify", "take5_activities_integrated", "first_visit_tdh_cfs",
+    "nature_issues_reported_text", "issue_other", "issue_other_specify", "support_offered_text",
+    "referral_made", "referral_destination", "external_referral_agency",
+]
+
+CORE_ANALYSIS_COLUMNS += list(ISSUE_COLUMNS.keys()) + list(SUPPORT_COLUMNS.keys())
 
 STAFF_MAP = {
     "mohamed sidi": "Mohamed Sidi", "mohamed": "Mohamed Sidi",
@@ -527,15 +569,121 @@ def yes_no(value) -> str:
     if pd.notna(num):
         return "Yes" if float(num) == 1 else "No" if float(num) == 0 else MISSING
     key = norm_text(value)
-    if key in {"yes", "y", "1", "true", "consented", "given"}:
+    if key in {"yes", "y", "1", "true", "consented", "consent", "i consent", "i agree", "agree", "agreed", "accepted", "accept", "given"}:
         return "Yes"
-    if key in {"no", "n", "0", "false", "not consented", "refused"}:
+    if key in {"no", "n", "0", "false", "not consented", "do not consent", "dont consent", "declined", "decline", "refused", "refuse"}:
         return "No"
     return MISSING
 
 
 def is_yes(value) -> bool:
     return yes_no(value) == "Yes"
+
+
+def clean_first_visit(value) -> str:
+    """Clean first-visit responses that may be Yes/No or text labels."""
+    yn = yes_no(value)
+    if yn in {"Yes", "No"}:
+        return yn
+    key = norm_text(value)
+    if not key:
+        return MISSING
+
+    no_patterns = [
+        r"^no\b", r"\brepeat\b", r"\breturn", r"\breturning\b", r"\bvisited before\b",
+        r"\bprevious", r"\balready", r"\bnot first\b", r"\bsecond\b", r"\bthird\b",
+        r"\bfollow up\b", r"\bfollowup\b", r"\bsubsequent\b", r"\bagain\b",
+        r"\bmore than once\b", r"\bvisited cfs before\b",
+    ]
+    if any(re.search(pattern, key) for pattern in no_patterns):
+        return "No"
+
+    yes_patterns = [
+        r"^yes\b", r"\bfirst\b", r"\b1st\b", r"\bone time\b", r"\bnew visit\b",
+        r"\bnew visitor\b", r"\bfirst time\b", r"\bfirst timer\b", r"\bnever visited\b",
+    ]
+    if any(re.search(pattern, key) for pattern in yes_patterns):
+        return "Yes"
+
+    return MISSING
+
+
+def nonmissing_value(value) -> bool:
+    if pd.isna(value):
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    return norm_text(text) not in {"", "missing unspecified", "missing", "nan", "none", "na", "n a"}
+
+
+def first_visit_candidate_columns(df: pd.DataFrame) -> List[str]:
+    """Find possible first-visit columns even if raw headers vary slightly."""
+    candidates: List[str] = []
+    for col in df.columns:
+        key = norm_text(col)
+        if col == "first_visit_tdh_cfs":
+            candidates.insert(0, col)
+            continue
+        # Avoid unrelated columns but catch raw survey variants.
+        if "first" in key and "visit" in key:
+            candidates.append(col)
+        elif "tdh" in key and "cfs" in key and "visit" in key:
+            candidates.append(col)
+    # preserve order and remove duplicates
+    seen = set()
+    out = []
+    for col in candidates:
+        if col not in seen:
+            seen.add(col)
+            out.append(col)
+    return out
+
+
+def combine_first_visit_source(row: pd.Series, candidate_cols: List[str]):
+    for col in candidate_cols:
+        if col in row.index and nonmissing_value(row.get(col)):
+            return row.get(col)
+    return None
+
+
+def repair_first_visit_columns(data: pd.DataFrame) -> pd.DataFrame:
+    """Ensure first_visit_clean is populated from the direct Yes/No field.
+
+    This is intentionally conservative: it uses first_visit_tdh_cfs as the source
+    of truth where available. If a changed XLSForm export left that field empty
+    but kept a raw first-visit column, it falls back to that raw column.
+    """
+    if data.empty:
+        return data
+    out = data.copy()
+
+    candidate_cols = []
+    for preferred in ["first_visit_tdh_cfs", "first_visit_source_raw"]:
+        if preferred in out.columns:
+            candidate_cols.append(preferred)
+    for col in out.columns:
+        key = norm_text(col)
+        if col not in candidate_cols and "first" in key and "visit" in key:
+            candidate_cols.append(col)
+
+    if not candidate_cols:
+        return out
+
+    def row_source(row):
+        return combine_first_visit_source(row, candidate_cols)
+
+    source = out.apply(row_source, axis=1)
+    cleaned = source.map(yes_no)
+    unresolved = cleaned.eq(MISSING) & source.map(nonmissing_value)
+    if unresolved.any():
+        cleaned.loc[unresolved] = source.loc[unresolved].map(clean_first_visit)
+
+    # Only replace if the repair found usable Yes/No values.
+    if cleaned.astype(str).isin(["Yes", "No"]).any():
+        out["first_visit_source_raw"] = source
+        out["first_visit_clean"] = cleaned
+    return out
 
 
 def clean_gender(value) -> str:
@@ -746,17 +894,63 @@ def read_file_cached(path: str, modified_time: float) -> pd.DataFrame:
 
 
 def harmonize_input_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename raw survey columns to the transformed names used by the dashboard."""
+    """Standardise the dataset to the analysis-column schema.
+
+    The online form can export either raw question labels, transformed analysis
+    column names, or both. If both exist, the analysis column is kept and missing
+    values are filled from the raw column. This prevents a blank transformed
+    column from overriding a populated raw survey column.
+    """
     out = df.copy()
     out.columns = [str(c).strip() for c in out.columns]
+
     stripped_map = {str(k).strip(): v for k, v in RAW_TO_TRANSFORMED_COLUMNS.items()}
+    normalized_map = {norm_text(k): v for k, v in RAW_TO_TRANSFORMED_COLUMNS.items()}
+
+    def missing_mask(series: pd.Series) -> pd.Series:
+        return (
+            series.isna()
+            | series.astype(str).str.strip().eq("")
+            | series.astype(str).str.strip().str.lower().isin(["nan", "none", "na", "n/a", "missing / unspecified"])
+        )
+
+    # First pass: rename raw columns to analysis names when the analysis column
+    # is not already present.
     rename_map = {}
-    for col in out.columns:
-        target = stripped_map.get(str(col).strip())
-        if target and target not in out.columns:
+    existing = set(out.columns)
+    for col in list(out.columns):
+        col_str = str(col).strip()
+        target = stripped_map.get(col_str) or normalized_map.get(norm_text(col_str))
+        if not target or col == target:
+            continue
+        if target not in existing:
             rename_map[col] = target
+            existing.add(target)
+
     if rename_map:
         out = out.rename(columns=rename_map)
+
+    # Second pass: if both raw and analysis columns exist, fill missing analysis
+    # values from the raw column and then remove the duplicate raw column.
+    for raw_col, target in stripped_map.items():
+        raw_col = str(raw_col).strip()
+        if raw_col in out.columns and target in out.columns and raw_col != target:
+            mask = missing_mask(out[target])
+            if mask.any():
+                out.loc[mask, target] = out.loc[mask, raw_col]
+            out = out.drop(columns=[raw_col])
+
+    # Third pass: handle punctuation variants through normalized matching.
+    for col in list(out.columns):
+        target = normalized_map.get(norm_text(col))
+        if target and target in out.columns and col != target:
+            mask = missing_mask(out[target])
+            if mask.any():
+                out.loc[mask, target] = out.loc[mask, col]
+            out = out.drop(columns=[col])
+        elif target and target not in out.columns and col != target:
+            out = out.rename(columns={col: target})
+
     return out
 
 
@@ -874,6 +1068,7 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
         "cfs_visited": None,
         "games_played": None,
         "game_other_specify": None,
+        "take5_activities_integrated": MISSING,
         "issue_other": None,
         "issue_other_specify": None,
         "nature_issues_reported_text": None,
@@ -883,15 +1078,24 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     for col, default in expected_defaults.items():
         ensure_column(df, col, default)
 
+    first_visit_candidates = first_visit_candidate_columns(df)
+    df["first_visit_source_raw"] = df.apply(lambda row: combine_first_visit_source(row, first_visit_candidates), axis=1)
+
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["month"] = df["date"].dt.to_period("M").astype("string")
     df["consent_clean"] = df["consent"].map(yes_no)
-    df = df[df["consent_clean"] == "Yes"].copy()
+    # Exclude only explicit consent refusals. This is safer after survey-schema changes:
+    # unknown/blank consent values should not wipe the whole dashboard.
+    df = df[df["consent_clean"] != "No"].copy()
 
     df["staff_clean"] = df["staff_filling_form"].map(clean_staff)
     df["gender_clean"] = df["child_gender"].map(clean_gender)
     df["disability_status_clean"] = df["child_living_with_disability"].map(yes_no)
-    df["first_visit_clean"] = df["first_visit_tdh_cfs"].map(yes_no)
+    # Use strict Yes/No semantics for this field: Yes = First visit, No = Repeat visit.
+    df["first_visit_clean"] = df["first_visit_source_raw"].map(yes_no)
+    unresolved_first_visit = df["first_visit_clean"].eq(MISSING) & df["first_visit_source_raw"].map(nonmissing_value)
+    if unresolved_first_visit.any():
+        df.loc[unresolved_first_visit, "first_visit_clean"] = df.loc[unresolved_first_visit, "first_visit_source_raw"].map(clean_first_visit)
     df["referral_made_clean"] = df["referral_made"].map(yes_no)
     df["referral_destination_grouped"] = df["referral_destination"].map(clean_referral_destination)
     df["external_referral_agency_clean"] = df["external_referral_agency"].map(lambda v: fuzzy_harmonize(v, AGENCY_LOOKUP, cutoff=0.86))
@@ -907,6 +1111,7 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     df["cfs_raw"] = df.apply(lambda r: first_available(r, ["child_friendly_space_visited", "cfs_visited"]), axis=1)
     df["cfs_clean"] = df["cfs_raw"].map(lambda v: fuzzy_harmonize(v, CFS_LOOKUP, cutoff=0.86))
     df["games_played_clean"] = df.apply(clean_game, axis=1)
+    df["take5_integrated_clean"] = df["take5_activities_integrated"].map(yes_no)
 
     for col, order in [
         ("age_group", AGE_GROUP_ORDER),
@@ -914,6 +1119,7 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
         ("first_visit_clean", YES_NO_ORDER),
         ("disability_status_clean", YES_NO_ORDER),
         ("referral_made_clean", YES_NO_ORDER),
+        ("take5_integrated_clean", YES_NO_ORDER),
         ("consent_clean", YES_NO_ORDER),
     ]:
         df[col] = pd.Categorical(df[col].astype(str), categories=order, ordered=True)
@@ -1197,6 +1403,7 @@ FRIENDLY_COLUMN_NAMES = {
     "issue_clean": "Issue",
     "support_clean": "Support Type",
     "game_clean": "Game / Activity",
+    "take5_integrated_clean": "Take 5 Integrated",
     "visit_type": "Visit Type",
     "first_visit_clean": "First Visit",
     "disability_status_clean": "Disability Status",
@@ -1745,6 +1952,22 @@ def top_category(data: pd.DataFrame, column: str, exclude: Optional[List] = None
 def yes_count(data: pd.DataFrame, column: str) -> int:
     return int(data[column].astype(str).eq("Yes").sum()) if column in data.columns else 0
 
+
+def schema_readiness_table(data: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for col in CORE_ANALYSIS_COLUMNS:
+        present = col in data.columns
+        filled = 0
+        if present:
+            filled = int((data[col].notna() & data[col].astype(str).str.strip().ne("") & data[col].astype(str).ne(MISSING)).sum())
+        rows.append({
+            "Analysis column": col,
+            "Status": "Available" if present else "Missing",
+            "Records filled": filled,
+        })
+    out = pd.DataFrame(rows)
+    return out.sort_values(["Status", "Analysis column"], ascending=[True, True]).reset_index(drop=True)
+
 # -----------------------------------------------------------------------------
 # Streamlit app
 # -----------------------------------------------------------------------------
@@ -1816,6 +2039,10 @@ except Exception as exc:
     st.error(f"The dashboard data could not be loaded/prepared: {exc}")
     st.stop()
 
+if df.empty:
+    st.error("The dataset was loaded, but no analysable records remained after preparation.")
+    st.info("This usually means the consent field or transformed column mapping changed. Check Data Quality → Analysis Schema Readiness after verifying the source file.")
+
 st.caption(f"Last App modified/dataset loaded: {source_modified}")
 
 # Sidebar filters
@@ -1861,6 +2088,7 @@ selected_age = multiselect_filter("🎂 Age group", filtered.assign(age_group=fi
 filtered = filter_if_selected(filtered.assign(age_group=filtered["age_group"].astype(str)), "age_group", selected_age)
 selected_disability = multiselect_filter("♿ Living with disability", filtered.assign(disability_status_clean=filtered["disability_status_clean"].astype(str)), "disability_status_clean", YES_NO_ORDER)
 filtered = filter_if_selected(filtered.assign(disability_status_clean=filtered["disability_status_clean"].astype(str)), "disability_status_clean", selected_disability)
+filtered = repair_first_visit_columns(filtered)
 
 st.sidebar.markdown(f"<div class='filter-result-card'><span>Filtered records</span><b>{len(filtered):,}</b></div>", unsafe_allow_html=True)
 
@@ -1881,7 +2109,7 @@ chips = [
     ("♿ Disability", ", ".join(selected_disability) if selected_disability else "All statuses"),
 ]
 chips_html = "".join(f"<div class='filter-chip'><span class='chip-label'>{label}</span><span class='chip-value'>{value}</span></div>" for label, value in chips)
-st.markdown(f"<div class='record-status'>✅ Showing {len(filtered):,} records with consent given</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='record-status'>✅ Showing {len(filtered):,} records excluding explicit consent No</div>", unsafe_allow_html=True)
 with st.expander("🔎 Active Filters", expanded=True):
     st.markdown(f"<div class='filter-path-chips'>{chips_html}</div>", unsafe_allow_html=True)
 
@@ -2011,9 +2239,18 @@ elif section == "CPVs KPIs":
 
 elif section == "Demographics":
     st.subheader("Demographics")
-    fvr = filtered[filtered["first_visit_clean"].astype(str).isin(["Yes", "No"])].copy()
+    demo_source = repair_first_visit_columns(filtered)
+    fvr = demo_source[demo_source["first_visit_clean"].astype(str).isin(["Yes", "No"])].copy()
     if not fvr.empty:
         fvr["visit_type"] = fvr["first_visit_clean"].astype(str).map({"Yes": "First visit", "No": "Repeat visit"})
+    else:
+        candidate_cols = [c for c in demo_source.columns if "first" in norm_text(c) and "visit" in norm_text(c)]
+        with st.expander("First-visit data diagnostic", expanded=True):
+            st.warning("No Yes/No values were detected for first-visit analysis after applying the current filters.")
+            st.caption("Candidate first-visit columns detected: " + (", ".join(map(str, candidate_cols)) if candidate_cols else "None"))
+            if candidate_cols:
+                diag_cols = ["record_id"] + candidate_cols[:5]
+                st.dataframe(demo_source[diag_cols].head(20), use_container_width=True, hide_index=True)
 
     c1, c2 = st.columns([1, 1])
     with c1:
@@ -2046,6 +2283,27 @@ elif section == "Games & Activities":
     gchart = count_table(game_context, ["game_clean", "gender_clean"])
     gchart = add_top_n_control(gchart, "game_clean", "games_chart", default=15)
     bar_chart(gchart, "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680)
+
+    st.divider()
+    st.subheader("Take 5 Integration into Play Sessions")
+    st.caption("This uses the new survey field: 'Was Take 5 activities integrated into play sessions?'")
+    take5_scope = filtered[filtered["take5_integrated_clean"].astype(str).isin(["Yes", "No"])].copy()
+    render_table(
+        table_with_total(take5_scope, ["take5_integrated_clean"], ["gender_clean"]),
+        "Take 5 Integration by Gender",
+        "take5_integration_gender",
+    )
+    take5_chart = count_table(take5_scope, ["take5_integrated_clean", "gender_clean"])
+    bar_chart(
+        take5_chart,
+        "Count",
+        "take5_integrated_clean",
+        "gender_clean",
+        "Take 5 integration into play sessions by gender",
+        horizontal=True,
+        height=360,
+        category_orders={"take5_integrated_clean": YES_NO_ORDER, "gender_clean": GENDER_ORDER},
+    )
 
     st.divider()
     st.subheader("Multiple Games / Activities per Child")
@@ -2137,6 +2395,11 @@ elif section == "Referrals":
 elif section == "Data Quality":
     st.subheader("Data Quality & Harmonisation Review")
     st.info("Records where consent was 'No' are excluded because they typically contain skipped form fields.")
+
+    st.markdown("#### Analysis Schema Readiness")
+    st.caption("This checks whether the transformed analysis-column structure required by the dashboard is present after raw-to-analysis column harmonisation.")
+    render_table(schema_readiness_table(df), "Analysis Schema Readiness", "schema_readiness")
+
     q1, q2, q3, q4 = st.columns(4)
     with q1:
         metric_card("Missing location", f"{filtered['location_clean'].astype(str).eq(MISSING).sum():,}", tone="danger")
@@ -2158,6 +2421,7 @@ elif section == "Data Quality":
         ("Location", "location_clean"),
         ("CFS / site", "cfs_clean"),
         ("Games played", "games_played_clean"),
+        ("Take 5 integrated", "take5_integrated_clean"),
         ("Staff", "staff_clean"),
     ]
     rows = []
@@ -2177,7 +2441,7 @@ elif section == "Data Quality":
 elif section == "Raw Data":
     st.subheader("Filtered Raw Data")
     display_cols = [
-        "record_id", "date", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_clean", "age_group", "disability_status_clean", "first_visit_clean", "referral_made_clean", "issues_combined", "support_combined", "games_played_clean",
+        "record_id", "date", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_clean", "age_group", "disability_status_clean", "first_visit_source_raw", "first_visit_clean", "referral_made_clean", "issues_combined", "support_combined", "games_played_clean", "take5_integrated_clean",
     ]
     display_cols = [c for c in display_cols if c in filtered.columns]
     st.dataframe(filtered[display_cols], use_container_width=True, hide_index=True)
