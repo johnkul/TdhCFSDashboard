@@ -9,7 +9,8 @@ Usage:
     streamlit run app.py
 
 Data options:
-    1. Place the Excel file at: data/CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx
+    1. Place the Excel file in the app data folder. The app prefers
+       data/CFS_QUESTIONNAIRE_-_T2.xlsx, then falls back to older filenames.
     2. Set environment variable CFS_DATA_PATH=/path/to/file.xlsx
 """
 
@@ -36,14 +37,20 @@ import streamlit.components.v1 as components
 # -----------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DATA_FILE_NAME = "CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx"
+DATA_FILE_CANDIDATES = [
+    "CFS_QUESTIONNAIRE_-_T2.xlsx",
+    "CFS_QUESTIONNAIRE_Tdh_Kenya_T1.xlsx",
+    "CFS_QUESTIONNAIRE_-_Tdh_Kenya_T1.xlsx",
+]
+DATA_FILE_NAME = DATA_FILE_CANDIDATES[0]
 DEFAULT_DATA_PATH = DATA_DIR / DATA_FILE_NAME
 LOGO_PATH = BASE_DIR / "assets" / "tdh-logo.png"
 DEVELOPER_LOGO_PATH = BASE_DIR / "assets" / "developer-logo.png"
 CSS_PATH = BASE_DIR / "assets" / "styles.css"
-APP_VERSION = "Version 1.0 · June 2026"
+APP_VERSION = "Version 1.0 · June 2026 · Build v12"
+PREPARED_DATA_PATH = DATA_DIR / "cfs_dashboard_prepared.pkl"
 PREPARED_CACHE_PATH = BASE_DIR / ".cfs_dashboard_prepared_cache.pkl"
-PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v9"
+PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v13"
 
 RAW_TO_TRANSFORMED_COLUMNS = {
     # System / metadata columns
@@ -90,6 +97,7 @@ RAW_TO_TRANSFORMED_COLUMNS = {
     "Which games did the child play/was engaged with?": "games_played",
     "If other, specify the type of game involved.": "game_other_specify",
     "Was Take 5 activities integrated into play sessions?": "take5_activities_integrated",
+    " Was Take 5 activities integrated into play sessions?": "take5_activities_integrated",
     "Is this your first visit to any of Tdh`s CFS": "first_visit_tdh_cfs",
     "Is this your first visit to any of Tdh's CFS": "first_visit_tdh_cfs",
     "Is this your first visit to any of Tdh’s CFS": "first_visit_tdh_cfs",
@@ -126,11 +134,55 @@ RAW_TO_TRANSFORMED_COLUMNS = {
     "Was a referral on the issue reported made?": "referral_made",
     "If yes, where was it referred to?": "referral_destination",
     "If External, please specify the agency referred to:": "external_referral_agency",
+    "THANK YOU FOR PARTICIPATING. ": "end_note",
 }
+
+# Additional schema aliases from the current online survey export. These keep
+# the app stable when Kobo/ODK exports either raw question labels or transformed
+# analysis-column names.
+RAW_TO_TRANSFORMED_COLUMNS.update({
+    "Thank you for visiting the Tdh Child-Friendly Space. We keep a record of our conversations by completing a form. This helps us follow up and provide the right support when needed. The information you share will remain confidential and will only be used for reporting or referral purposes. Do you give your consent for us to record this information?": "information_statement",
+    "_id": "id",
+    "_uuid": "uuid",
+    "_submission_time": "submission_time",
+    "_validation_status": "validation_status",
+    "_submitted_by": "submitted_by",
+    "__version__": "version",
+    "*id*": "id",
+    "*uuid*": "uuid",
+    "*submission*time": "submission_time",
+    "*validation*status": "validation_status",
+    "*submitted*by": "submitted_by",
+    "**version**": "version",
+})
+
+# Ensure transformed analysis-column names map to themselves. This makes the
+# standardisation layer explicit and prevents future schema changes from being
+# silently ignored when the dataset already arrives transformed.
+ANALYSIS_COLUMN_NAMES = [
+    "today", "username", "deviceid", "phonenumber", "information_statement", "consent",
+    "staff_filling_form", "date", "child_name", "child_age", "child_gender",
+    "child_living_with_disability", "disability_type", "disability_type_other",
+    "child_individual_number", "caregiver_parent_names", "camp_of_information_seeking",
+    "specific_camp_location", "section_block_residence", "camp_location_alt",
+    "exact_registered_location", "caregiver_parent_phone", "child_friendly_space_visited",
+    "cfs_visited", "games_played", "game_other_specify", "take5_activities_integrated",
+    "first_visit_tdh_cfs", "nature_issues_reported_text", "issue_new_arrival_lack_of_card",
+    "issue_disability", "issue_basic_needs", "issue_deceased_parent", "issue_education",
+    "issue_psychosocial_support", "issue_neglected", "issue_parents_separated",
+    "issue_child_out_of_wedlock", "issue_food", "issue_clothing", "issue_shelter",
+    "issue_reporting_protection_concern", "issue_need_profiling_registration_unhcr",
+    "issue_none", "issue_other", "issue_other_specify", "support_offered_text",
+    "support_psychological_first_aid", "support_play_art_therapy", "support_psychoeducation",
+    "support_none", "referral_made", "referral_destination", "external_referral_agency",
+    "end_note", "gps_location", "id", "uuid", "submission_time", "validation_status",
+    "notes", "status", "submitted_by", "version", "tags", "root_uuid", "index",
+]
+RAW_TO_TRANSFORMED_COLUMNS.update({col: col for col in ANALYSIS_COLUMN_NAMES})
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
-AGE_GROUP_ORDER = ["0-4 years", "5-11 years", "12-17 years", MISSING]
+AGE_GROUP_ORDER = ["0-5 years", "6-12 years", "13-17 years", MISSING]
 YES_NO_ORDER = ["Yes", "No", MISSING]
 GENDER_ORDER = ["Girls", "Boys", "Transgender", MISSING]
 TOP_N_OPTIONS = [5, 10, 15, 25]
@@ -162,13 +214,17 @@ SUPPORT_COLUMNS = {
 }
 
 CORE_ANALYSIS_COLUMNS = [
+    "today", "username", "deviceid", "phonenumber", "information_statement",
     "consent", "staff_filling_form", "date", "child_name", "child_age", "child_gender",
     "child_living_with_disability", "disability_type", "disability_type_other",
+    "child_individual_number", "caregiver_parent_names", "caregiver_parent_phone",
     "camp_of_information_seeking", "specific_camp_location", "section_block_residence",
     "camp_location_alt", "exact_registered_location", "child_friendly_space_visited", "cfs_visited",
     "games_played", "game_other_specify", "take5_activities_integrated", "first_visit_tdh_cfs",
     "nature_issues_reported_text", "issue_other", "issue_other_specify", "support_offered_text",
     "referral_made", "referral_destination", "external_referral_agency",
+    "end_note", "gps_location", "id", "uuid", "submission_time", "validation_status",
+    "notes", "status", "submitted_by", "version", "tags", "root_uuid", "index",
 ]
 
 CORE_ANALYSIS_COLUMNS += list(ISSUE_COLUMNS.keys()) + list(SUPPORT_COLUMNS.keys())
@@ -475,6 +531,17 @@ LOWER_TOKENS = frozenset({"and", "or", "of", "the", "for", "to", "in", "by", "wi
 def resolve_data_path() -> Path:
     if os.environ.get("CFS_DATA_PATH"):
         return Path(os.environ["CFS_DATA_PATH"])
+    for file_name in DATA_FILE_CANDIDATES:
+        candidate = DATA_DIR / file_name
+        if candidate.exists():
+            return candidate
+    data_files = sorted(
+        list(DATA_DIR.glob("*.xlsx")) + list(DATA_DIR.glob("*.xls")) + list(DATA_DIR.glob("*.csv")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if data_files:
+        return data_files[0]
     return DEFAULT_DATA_PATH
 
 
@@ -780,12 +847,12 @@ def age_group(value) -> str:
     age = extract_numeric_age(value)
     if age is None:
         return MISSING
-    if 0 <= age <= 4:
-        return "0-4 years"
-    if 5 <= age <= 11:
-        return "5-11 years"
-    if 12 <= age <= 17:
-        return "12-17 years"
+    if 0 <= age <= 5:
+        return "0-5 years"
+    if 6 <= age <= 12:
+        return "6-12 years"
+    if 13 <= age <= 17:
+        return "13-17 years"
     return MISSING
 
 
@@ -1048,6 +1115,11 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     df.insert(0, "record_id", range(1, len(df) + 1))
 
     expected_defaults = {
+        "today": None,
+        "username": None,
+        "deviceid": None,
+        "phonenumber": None,
+        "information_statement": None,
         "date": pd.NaT,
         "consent": "Yes",
         "staff_filling_form": MISSING,
@@ -1074,6 +1146,22 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
         "nature_issues_reported_text": None,
         "support_offered_text": None,
         "child_name": None,
+        "child_individual_number": None,
+        "caregiver_parent_names": None,
+        "caregiver_parent_phone": None,
+        "end_note": None,
+        "gps_location": None,
+        "id": None,
+        "uuid": None,
+        "submission_time": None,
+        "validation_status": None,
+        "notes": None,
+        "status": None,
+        "submitted_by": None,
+        "version": None,
+        "tags": None,
+        "root_uuid": None,
+        "index": None,
     }
     for col, default in expected_defaults.items():
         ensure_column(df, col, default)
@@ -1084,9 +1172,8 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["month"] = df["date"].dt.to_period("M").astype("string")
     df["consent_clean"] = df["consent"].map(yes_no)
-    # Exclude only explicit consent refusals. This is safer after survey-schema changes:
-    # unknown/blank consent values should not wipe the whole dashboard.
-    df = df[df["consent_clean"] != "No"].copy()
+    # Analyse only records where consent was given. Consent = No rows are skipped in the form.
+    df = df[df["consent_clean"] == "Yes"].copy()
 
     df["staff_clean"] = df["staff_filling_form"].map(clean_staff)
     df["gender_clean"] = df["child_gender"].map(clean_gender)
@@ -1191,14 +1278,39 @@ def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd
        or dashboard sections.
     3. Invalidate automatically when the source file modified time changes.
     """
-    source_path = str(Path(path).resolve())
+    p = Path(path)
+    source_path = str(p.resolve())
+    source_file_name = p.name
+    source_size = p.stat().st_size if p.exists() else None
+
+    try:
+        if PREPARED_DATA_PATH.exists():
+            payload = pd.read_pickle(PREPARED_DATA_PATH)
+            if (
+                payload.get("cache_version") == PREPARED_CACHE_VERSION
+                and payload.get("source_file_name") == source_file_name
+                and payload.get("source_path") == source_path
+                and payload.get("source_size") == source_size
+                and payload.get("modified_time") == modified_time
+            ):
+                return (
+                    int(payload.get("raw_count", len(payload["df"]))),
+                    payload["df"],
+                    payload["issue_long"],
+                    payload["support_long"],
+                    payload["game_long"],
+                )
+    except Exception:
+        pass
 
     try:
         if PREPARED_CACHE_PATH.exists():
             payload = pd.read_pickle(PREPARED_CACHE_PATH)
             if (
                 payload.get("cache_version") == PREPARED_CACHE_VERSION
+                and payload.get("source_file_name") == source_file_name
                 and payload.get("source_path") == source_path
+                and payload.get("source_size") == source_size
                 and payload.get("modified_time") == modified_time
             ):
                 return (
@@ -1214,7 +1326,6 @@ def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd
         except Exception:
             pass
 
-    p = Path(path)
     if p.suffix.lower() in {".xlsx", ".xls"}:
         raw_df = pd.read_excel(p)
     else:
@@ -1222,21 +1333,24 @@ def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd
 
     raw_count = int(len(raw_df))
     df, issue_long, support_long, game_long = prepare_data(raw_df)
+    payload = {
+        "cache_version": PREPARED_CACHE_VERSION,
+        "source_file_name": source_file_name,
+        "source_path": source_path,
+        "source_size": source_size,
+        "modified_time": modified_time,
+        "raw_count": raw_count,
+        "df": df,
+        "issue_long": issue_long,
+        "support_long": support_long,
+        "game_long": game_long,
+    }
 
     try:
-        pd.to_pickle(
-            {
-                "cache_version": PREPARED_CACHE_VERSION,
-                "source_path": source_path,
-                "modified_time": modified_time,
-                "raw_count": raw_count,
-                "df": df,
-                "issue_long": issue_long,
-                "support_long": support_long,
-                "game_long": game_long,
-            },
-            PREPARED_CACHE_PATH,
-        )
+        pd.to_pickle(payload, PREPARED_CACHE_PATH)
+        if Path(path).resolve().parent == DATA_DIR.resolve():
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            pd.to_pickle(payload, PREPARED_DATA_PATH)
     except Exception:
         pass
 
@@ -1394,8 +1508,8 @@ def table_with_total(data: pd.DataFrame, index: List[str], columns: Optional[Lis
 
 
 FRIENDLY_COLUMN_NAMES = {
-    "settlement_clean": "Camp / Settlement",
-    "location_clean": "Specific Location",
+    "settlement_clean": "Camp Name",
+    "location_clean": "Specific Camp Location",
     "cfs_clean": "CFS / Site",
     "staff_clean": "Staff / CPV",
     "gender_clean": "Gender",
@@ -1715,6 +1829,19 @@ def add_top_n_control(data: pd.DataFrame, category_col: str, key: str, default: 
     return data[data[category_col].isin(totals.head(n).index)].copy()
 
 
+def horizontal_category_order(data: pd.DataFrame, category_col: str, value_col: str = "Count") -> List[str]:
+    if data.empty or category_col not in data.columns or value_col not in data.columns:
+        return []
+    totals = (
+        data.groupby(category_col, observed=False)[value_col]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    # Plotly draws y-axis category arrays from bottom to top, so reverse the
+    # descending list to keep the largest visible at the top of the chart.
+    return [str(v) for v in reversed(totals.index.tolist())]
+
+
 def bar_chart(data: pd.DataFrame, x: str, y: str, color: Optional[str] = None, title: str = "", horizontal: bool = False, height: int = 420, category_orders: Optional[Dict] = None) -> None:
     if data.empty:
         st.info("No records available for this chart.")
@@ -1742,6 +1869,10 @@ def bar_chart(data: pd.DataFrame, x: str, y: str, color: Optional[str] = None, t
     )
     fig.update_xaxes(showgrid=True, gridcolor="#e9eef5", zeroline=False)
     fig.update_yaxes(showgrid=False, zeroline=False)
+    if horizontal:
+        order = horizontal_category_order(data, y, "Count" if "Count" in data.columns else x)
+        if order:
+            fig.update_yaxes(categoryorder="array", categoryarray=order)
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "responsive": True})
 
 
@@ -1985,6 +2116,7 @@ with logo_col:
         st.image(str(LOGO_PATH), use_container_width=True)
 
 st.sidebar.markdown("<div class='sidebar-title'>Dashboard Controls</div>", unsafe_allow_html=True)
+st.sidebar.caption(APP_VERSION)
 ctrl_col1, ctrl_col2 = st.sidebar.columns(2)
 with ctrl_col1:
     if st.button("🔄 Reload", use_container_width=True, help="Clear cached data and reload from the configured dataset."):
@@ -2072,9 +2204,9 @@ else:
     date_label = "All available dates"
 
 st.sidebar.markdown("<div class='filter-group-title'>📍 Location Path</div>", unsafe_allow_html=True)
-selected_camp = multiselect_filter("🏕 Camp / settlement", filtered, "settlement_clean")
+selected_camp = multiselect_filter("🏕 Camp Name", filtered, "settlement_clean")
 filtered = filter_if_selected(filtered, "settlement_clean", selected_camp)
-selected_location = multiselect_filter("📌 Specific location", filtered, "location_clean")
+selected_location = multiselect_filter("📌 Specific camp location", filtered, "location_clean")
 filtered = filter_if_selected(filtered, "location_clean", selected_location)
 selected_cfs = multiselect_filter("🏛 CFS / site", filtered, "cfs_clean")
 filtered = filter_if_selected(filtered, "cfs_clean", selected_cfs)
@@ -2090,6 +2222,20 @@ selected_disability = multiselect_filter("♿ Living with disability", filtered.
 filtered = filter_if_selected(filtered.assign(disability_status_clean=filtered["disability_status_clean"].astype(str)), "disability_status_clean", selected_disability)
 filtered = repair_first_visit_columns(filtered)
 
+filter_summary_bits = [
+    f"Date selected: {date_label}",
+    f"Camp Name: {', '.join(selected_camp) if selected_camp else 'All camps'}",
+    f"Specific camp location: {', '.join(selected_location) if selected_location else 'All specific camp locations'}",
+    f"CFS / site: {', '.join(selected_cfs) if selected_cfs else 'All CFS / sites'}",
+    f"Staff: {', '.join(selected_staff) if selected_staff else 'All staff'}",
+    f"Gender: {', '.join(selected_gender) if selected_gender else 'All genders'}",
+    f"Age group: {', '.join(selected_age) if selected_age else 'All age groups'}",
+    f"Disability: {', '.join(selected_disability) if selected_disability else 'All disability statuses'}",
+]
+st.sidebar.markdown(
+    f"<div class='filter-summary'><strong>Current filter path:</strong><br>{'<br>'.join(filter_summary_bits)}</div>",
+    unsafe_allow_html=True,
+)
 st.sidebar.markdown(f"<div class='filter-result-card'><span>Filtered records</span><b>{len(filtered):,}</b></div>", unsafe_allow_html=True)
 
 ctx_cols = ["record_id", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_group"]
@@ -2097,21 +2243,10 @@ issue_context = issue_long.merge(filtered[ctx_cols], on="record_id", how="inner"
 support_context = support_long.merge(filtered[ctx_cols], on="record_id", how="inner") if not filtered.empty else support_long.iloc[0:0]
 game_context = game_long.merge(filtered[ctx_cols], on="record_id", how="inner") if not filtered.empty else game_long.iloc[0:0]
 
-# Active filter chips
-chips = [
-    ("📅 Dates", date_label),
-    ("🏕 Camp", ", ".join(selected_camp) if selected_camp else "All camps"),
-    ("📍 Location", ", ".join(selected_location) if selected_location else "All locations"),
-    ("🏛 CFS / Site", ", ".join(selected_cfs) if selected_cfs else "All sites"),
-    ("👤 Staff", ", ".join(selected_staff) if selected_staff else "All staff"),
-    ("⚧ Gender", ", ".join(selected_gender) if selected_gender else "All genders"),
-    ("🎂 Age", ", ".join(selected_age) if selected_age else "All ages"),
-    ("♿ Disability", ", ".join(selected_disability) if selected_disability else "All statuses"),
-]
-chips_html = "".join(f"<div class='filter-chip'><span class='chip-label'>{label}</span><span class='chip-value'>{value}</span></div>" for label, value in chips)
-st.markdown(f"<div class='record-status'>✅ Showing {len(filtered):,} records excluding explicit consent No</div>", unsafe_allow_html=True)
-with st.expander("🔎 Active Filters", expanded=True):
-    st.markdown(f"<div class='filter-path-chips'>{chips_html}</div>", unsafe_allow_html=True)
+st.markdown(
+    f"<div class='record-status'>Showing {len(filtered):,} of {len(df):,} records | Date selected: {date_label}</div>",
+    unsafe_allow_html=True,
+)
 
 # KPIs
 referral_rate = filtered["referral_made_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
