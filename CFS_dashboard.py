@@ -1936,8 +1936,27 @@ def line_chart(data: pd.DataFrame, x: str, y: str, color: Optional[str] = None, 
 # UI helpers
 # -----------------------------------------------------------------------------
 def page_header(title: str, subtitle: Optional[str] = None) -> None:
-    subtitle_html = f"<p>{subtitle}</p>" if subtitle else ""
-    st.markdown(f"<div class='dashboard-title'><h1>{title}</h1>{subtitle_html}</div>", unsafe_allow_html=True)
+    """Render the title panel with the Tdh logo inside the panel."""
+    logo_uri = image_to_data_uri(LOGO_PATH)
+    logo_html = (
+        f'<img src="{logo_uri}" alt="Tdh logo" '
+        'style="width:clamp(76px,9vw,126px);height:auto;object-fit:contain;flex:0 0 auto;" />'
+        if logo_uri
+        else ""
+    )
+    subtitle_html = f"<p>{html_lib.escape(subtitle)}</p>" if subtitle else ""
+    st.markdown(
+        f"""
+        <div class="dashboard-title" style="display:flex;align-items:center;justify-content:space-between;gap:1.5rem;">
+            <div style="min-width:0;">
+                <h1>{html_lib.escape(title)}</h1>
+                {subtitle_html}
+            </div>
+            {logo_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def section_header(title: str, subtitle: Optional[str] = None) -> None:
@@ -2140,15 +2159,10 @@ def schema_readiness_table(data: pd.DataFrame) -> pd.DataFrame:
 st.set_page_config(page_title="Tdh Kenya CFS Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 load_external_css(CSS_PATH)
 
-header_col, logo_col = st.columns([5, 1])
-with header_col:
-    page_header(
-        "Tdh Kenya Child Friendly Spaces Dashboard",
-        "Professional monitoring dashboard for CFS visits, demographics, protection issues, support, activities, referrals, and data quality.",
-    )
-with logo_col:
-    if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), use_container_width=True)
+page_header(
+    "Tdh Kenya Child Friendly Spaces Dashboard",
+    "Professional monitoring dashboard for CFS visits, demographics, protection issues, support, activities, referrals, and data quality.",
+)
 
 st.sidebar.markdown("<div class='sidebar-title'>Dashboard Controls</div>", unsafe_allow_html=True)
 st.sidebar.caption(APP_VERSION)
