@@ -188,6 +188,16 @@ GENDER_ORDER = ["Girls", "Boys", "Transgender", MISSING]
 TOP_N_OPTIONS = [5, 10, 15, 25]
 CHART_COLORS = ["#1d4ed8", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0891b2", "#be123c", "#4338ca"]
 
+# Direct and indirect identifiers must never be included in ordinary dashboard
+# downloads. Keep them in the prepared frame only for controlled internal data
+# quality checks.
+PII_COLUMNS = {
+    "child_name", "child_individual_number", "caregiver_parent_names",
+    "caregiver_parent_phone", "phonenumber", "deviceid", "username",
+    "gps_location", "exact_registered_location", "section_block_residence",
+    "uuid", "root_uuid", "id", "notes", "tags", "submitted_by",
+}
+
 ISSUE_COLUMNS = {
     "issue_new_arrival_lack_of_card": "New arrival / Lack of card",
     "issue_disability": "Disability",
@@ -947,6 +957,12 @@ def df_signature(df: pd.DataFrame) -> str:
     meta = f"{safe.shape}|{'|'.join(safe.columns)}".encode("utf-8", errors="ignore")
     hashes = pd.util.hash_pandas_object(safe, index=True).values.tobytes()
     return hashlib.md5(meta + hashes).hexdigest()[:12]
+
+
+def privacy_safe_export(data: pd.DataFrame) -> pd.DataFrame:
+    """Return an export frame with direct identifiers removed."""
+    sensitive = [column for column in data.columns if column in PII_COLUMNS]
+    return data.drop(columns=sensitive, errors="ignore").copy()
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
@@ -1979,14 +1995,34 @@ def insight_card(label, value, helper=None) -> None:
 
 SECTION_META = {
     "Overview": {"icon": "🏠", "label": "Overview", "desc": "Coverage, age profile, top issues and top activities for the active filters."},
-    "Monthly Trends": {"icon": "📈", "label": "Monthly Trends", "desc": "Month-by-month visit volume, gender trends, referral and first-visit rates."},
-    "CPVs KPIs": {"icon": "👥", "label": "CPVs KPIs", "desc": "Staff / CPV performance, submissions, referrals and operating coverage."},
+    "Monthly Trends": {"icon": "📈", "label": "Trends Over Time", "desc": "Use this section to follow monthly visits, gender patterns, referrals and first visits."},
+    "CPVs KPIs": {"icon": "👥", "label": "Staff / CPV Performance", "desc": "Use this section to review staff activity, submissions, referrals and operating coverage."},
     "Demographics": {"icon": "🧒", "label": "Demographics", "desc": "First vs repeat visits, gender, age group and site-level beneficiary profile."},
     "Games & Activities": {"icon": "🎲", "label": "Games & Activities", "desc": "Harmonised games, activities, multiple-activity combinations and engagement patterns."},
-    "Protection & Support": {"icon": "🛡️", "label": "Protection & Support", "desc": "Disability, issue mentions, multi-issue records and support offered."},
+    "Protection & Support": {"icon": "🛡️", "label": "Protection Needs & Support", "desc": "Use this section to understand disability, reported issues and support provided."},
     "Referrals": {"icon": "🔁", "label": "Referrals", "desc": "Referral rates, destinations and external referral agency breakdowns."},
     "Data Quality": {"icon": "✅", "label": "Data Quality", "desc": "Completeness checks and harmonisation review for operational data quality."},
-    "Raw Data": {"icon": "📄", "label": "Raw Data", "desc": "Filtered row-level extract for validation and download."},
+    "Raw Data": {"icon": "📄", "label": "Records & Export", "desc": "Use this section to inspect filtered records and prepare a privacy-safe export."},
+}
+
+SECTION_OPTIONS = ["Overview", "Monthly Trends", "CPVs KPIs", "Demographics", "Games & Activities", "Protection & Support", "Referrals", "Data Quality", "Raw Data"]
+SECTION_CATEGORY = {
+    "Overview": "Summary", "Monthly Trends": "Summary",
+    "Demographics": "People & Services", "CPVs KPIs": "People & Services", "Games & Activities": "People & Services",
+    "Protection & Support": "Protection Pathway", "Referrals": "Protection Pathway",
+    "Data Quality": "Data Management", "Raw Data": "Data Management",
+}
+SECTION_GROUPS = {
+    "Summary": ["Overview", "Monthly Trends"],
+    "People & Services": ["Demographics", "CPVs KPIs", "Games & Activities"],
+    "Protection Pathway": ["Protection & Support", "Referrals"],
+    "Data Management": ["Data Quality", "Raw Data"],
+}
+CATEGORY_LABELS = {
+    "Summary": "📊 Summary",
+    "People & Services": "👥 People & Services",
+    "Protection Pathway": "🛡️ Protection Pathway",
+    "Data Management": "✅ Data Management",
 }
 
 
@@ -1999,45 +2035,37 @@ def nav_menu(options: List[str], key: str = "dashboard_section") -> str:
     if key not in st.session_state or st.session_state[key] not in options:
         st.session_state[key] = options[0]
 
-    st.markdown("<div class='section-nav-shell'>", unsafe_allow_html=True)
-    if hasattr(st, "pills"):
-        try:
-            selected = st.pills(
-                "Dashboard section",
-                options,
-                selection_mode="single",
-                key=key,
-                label_visibility="collapsed",
-                format_func=section_label,
-            ) or options[0]
-            st.markdown("</div>", unsafe_allow_html=True)
-            return selected
-        except Exception:
-            pass
-    if hasattr(st, "segmented_control"):
-        try:
-            selected = st.segmented_control(
-                "Dashboard section",
-                options,
-                key=key,
-                label_visibility="collapsed",
-                format_func=section_label,
-            ) or options[0]
-            st.markdown("</div>", unsafe_allow_html=True)
-            return selected
-        except Exception:
-            pass
-    selected = st.radio(
-        "Dashboard section",
-        options,
-        index=options.index(st.session_state.get(key, options[0])),
-        horizontal=True,
-        key=key,
-        label_visibility="collapsed",
-        format_func=section_label,
+    category_key = f"{key}_category"
+    current_category = SECTION_CATEGORY[st.session_state[key]]
+    if category_key not in st.session_state or st.session_state[category_key] not in SECTION_GROUPS:
+        st.session_state[category_key] = current_category
+
+    category = st.selectbox(
+        "**Analysis area**",
+        list(SECTION_GROUPS),
+        key=category_key,
+        format_func=lambda value: CATEGORY_LABELS[value],
+        help="Start with a broad area, then choose the specific view you need.",
     )
-    st.markdown("</div>", unsafe_allow_html=True)
-    return selected
+    views = SECTION_GROUPS[category]
+    if st.session_state[key] not in views:
+        st.session_state[key] = views[0]
+
+    return st.radio(
+        "View",
+        views,
+        index=views.index(st.session_state[key]),
+        horizontal=False,
+        key=key,
+        format_func=section_label,
+        help="Changing views keeps all active filters in place.",
+    )
+
+
+def go_to_overview() -> None:
+    """Navigation callback executed before Streamlit recreates the widgets."""
+    st.session_state["dashboard_section_category"] = "Summary"
+    st.session_state["dashboard_section"] = "Overview"
 
 
 def section_intro_card(section: str) -> None:
@@ -2138,6 +2166,347 @@ def yes_count(data: pd.DataFrame, column: str) -> int:
     return int(data[column].astype(str).eq("Yes").sum()) if column in data.columns else 0
 
 
+def build_section_takeaways(
+    section: str,
+    records: pd.DataFrame,
+    issues: pd.DataFrame,
+    support: pd.DataFrame,
+    games: pd.DataFrame,
+) -> str:
+    """Create one concise, auditable narrative for the selected section."""
+    total = len(records)
+    if total == 0:
+        return "No records match the current filters, so no descriptive findings can be generated."
+
+    findings: List[str] = []
+
+    def leading(data: pd.DataFrame, column: str, excluded: Optional[Set[str]] = None) -> Tuple[str, int]:
+        if data.empty or column not in data.columns:
+            return "", 0
+        values = data[column].dropna().astype(str)
+        if excluded:
+            values = values[~values.isin(excluded)]
+        counts = values.value_counts()
+        return (str(counts.index[0]), int(counts.iloc[0])) if not counts.empty else ("", 0)
+
+    if section == "Overview":
+        camp, camp_count = leading(records, "settlement_clean", {MISSING, REVIEW})
+        if camp:
+            findings.append(f"Of the {total:,} filtered records, {camp} contributes the largest share at {camp_count:,} ({camp_count / total:.1%}).")
+        issue, issue_count = leading(issues, "issue_clean", {MISSING, REVIEW})
+        if issue:
+            findings.append(f"{issue} is the most frequently recorded issue with {issue_count:,} mentions; these are multi-response mentions rather than unique children.")
+
+    elif section == "Monthly Trends":
+        dated = records.dropna(subset=["date"]).copy()
+        if not dated.empty:
+            monthly = dated.assign(period=dated["date"].dt.to_period("M")).groupby("period", observed=False).size().sort_index()
+            peak_period = monthly.idxmax()
+            findings.append(f"Across {total:,} filtered records, the highest monthly volume is {int(monthly.max()):,} in {peak_period.strftime('%b %Y')}.")
+            if len(monthly) >= 2 and int(monthly.iloc[-2]) > 0:
+                change = (int(monthly.iloc[-1]) - int(monthly.iloc[-2])) / int(monthly.iloc[-2])
+                direction = "higher" if change > 0 else "lower" if change < 0 else "unchanged"
+                findings.append(f"The latest month is {abs(change):.1%} {direction} than the preceding month, indicating a descriptive change in recorded activity rather than a causal effect.")
+
+    elif section == "CPVs KPIs":
+        staff, staff_count = leading(records, "staff_clean", {MISSING, REVIEW})
+        if staff:
+            findings.append(f"Among {total:,} filtered records, {staff} has the largest submission count at {staff_count:,} ({staff_count / total:.1%}).")
+        findings.append(f"Overall, {records['staff_clean'].astype(str).loc[lambda s: ~s.isin([MISSING, REVIEW])].nunique():,} staff / CPVs are represented.")
+
+    elif section == "Demographics":
+        age, age_count = leading(records, "age_group", {MISSING, REVIEW})
+        if age:
+            findings.append(f"The largest age group is {age}, comprising {age_count:,} records ({age_count / total:.1%}).")
+        known_visit = records["first_visit_clean"].astype(str).isin(["Yes", "No"])
+        if known_visit.sum() >= 5:
+            rate = records.loc[known_visit, "first_visit_clean"].astype(str).eq("Yes").mean()
+            findings.append(f"Among {int(known_visit.sum()):,} records with a valid Yes/No response, the first-visit rate is {rate:.1%}.")
+
+    elif section == "Games & Activities":
+        game, game_count = leading(games, "game_clean", {MISSING, REVIEW})
+        if game:
+            findings.append(f"{game} is the leading activity with {game_count:,} mentions among {len(games):,} activity mentions across {games['record_id'].nunique():,} records.")
+            findings.append("Activity totals exceed record totals when children participated in more than one activity.")
+
+    elif section == "Protection & Support":
+        disability_rate = records["disability_status_clean"].astype(str).eq("Yes").mean()
+        findings.append(f"Within the {total:,} filtered records, {disability_rate:.1%} are marked as living with a disability.")
+        issue, issue_count = leading(issues, "issue_clean", {MISSING, REVIEW})
+        support_label, support_count = leading(support, "support_clean", {MISSING, REVIEW})
+        if issue:
+            findings.append(f"{issue} is the leading reported issue with {issue_count:,} mentions.")
+        if support_label:
+            findings.append(f"{support_label} is the most recorded support response with {support_count:,} mentions.")
+
+    elif section == "Referrals":
+        referral_rate = records["referral_made_clean"].astype(str).eq("Yes").mean()
+        referral_count = int(records["referral_made_clean"].astype(str).eq("Yes").sum())
+        findings.append(f"Of {total:,} filtered records, {referral_count:,} are marked as referred, giving a descriptive referral rate of {referral_rate:.1%}.")
+        referred = records[records["referral_made_clean"].astype(str).eq("Yes")]
+        destination, destination_count = leading(referred, "referral_destination_grouped", {MISSING, REVIEW, "Unknown"})
+        if destination:
+            findings.append(f"{destination} is the most recorded destination, accounting for {destination_count:,} referred records.")
+
+    elif section == "Data Quality":
+        checks = {
+            "date": records["date"].isna(),
+            "CFS / site": records["cfs_clean"].astype(str).eq(MISSING),
+            "location": records["location_clean"].astype(str).isin([MISSING, REVIEW]),
+            "age": records["age_clean"].isna(),
+        }
+        worst_label, worst_count = max(((label, int(mask.sum())) for label, mask in checks.items()), key=lambda item: item[1])
+        if worst_count:
+            findings.append(f"Across {total:,} filtered records, the largest monitored completeness gap is {worst_label}, affecting {worst_count:,} records ({worst_count / total:.1%}).")
+        else:
+            findings.append(f"All {total:,} filtered records pass the four headline completeness checks for date, CFS/site, location and age.")
+
+    elif section == "Raw Data":
+        findings.append(f"This view contains {total:,} filtered records for validation and review rather than causal interpretation.")
+        findings.append("The downloadable extract removes direct identifiers and sensitive location or metadata fields.")
+
+    # Add one consistent gender-disaggregation sentence when usable values are
+    # present. It reports the actual denominator and does not infer causation.
+    gender_values = records["gender_clean"].dropna().astype(str)
+    gender_values = gender_values[~gender_values.isin([MISSING, REVIEW])]
+    gender_counts = gender_values.value_counts()
+    gender_sentence = ""
+    if not gender_counts.empty:
+        gender_denominator = int(gender_counts.sum())
+        gender_parts = [
+            f"{label}: {int(count):,} ({int(count) / gender_denominator:.1%})"
+            for label, count in gender_counts.items()
+        ]
+        gender_sentence = (
+            f"By recorded gender, among {gender_denominator:,} records with a usable response, "
+            + "; ".join(gender_parts)
+            + "."
+        )
+
+    narrative_parts = findings[:2]
+    if gender_sentence:
+        narrative_parts.append(gender_sentence)
+    return " ".join(narrative_parts) if narrative_parts else "The available filtered data do not support a sufficiently clear descriptive finding for this section."
+
+
+def build_table_driven_narrative(
+    section: str,
+    records: pd.DataFrame,
+    issues: pd.DataFrame,
+    support: pd.DataFrame,
+    games: pd.DataFrame,
+) -> str:
+    """Summarise the full family of analytical tables used by a section."""
+    total = len(records)
+    if total == 0:
+        return "No records match the current filters, so the section tables do not support a finding."
+
+    excluded = {MISSING, REVIEW, "Unknown", "None"}
+
+    def counts(data: pd.DataFrame, column: str) -> pd.Series:
+        if data.empty or column not in data.columns:
+            return pd.Series(dtype="int64")
+        values = data[column].dropna().astype(str)
+        values = values[~values.isin(excluded)]
+        return values.value_counts()
+
+    def leader(data: pd.DataFrame, column: str) -> Tuple[str, int]:
+        result = counts(data, column)
+        return (str(result.index[0]), int(result.iloc[0])) if not result.empty else ("", 0)
+
+    def gender_summary(data: pd.DataFrame = records) -> str:
+        result = counts(data, "gender_clean")
+        denominator = int(result.sum())
+        if not denominator:
+            return "Gender disaggregation is unavailable because no usable gender responses remain."
+        parts = [f"{label}: {int(value):,} ({int(value) / denominator:.1%})" for label, value in result.items()]
+        return f"Among {denominator:,} usable gender responses, " + "; ".join(parts) + "."
+
+    def leaders_by_gender(data: pd.DataFrame, category: str, unit: str) -> str:
+        if data.empty or category not in data.columns or "gender_clean" not in data.columns:
+            return ""
+        parts = []
+        for gender in GENDER_ORDER:
+            if gender == MISSING:
+                continue
+            scoped = data[data["gender_clean"].astype(str).eq(gender)]
+            label, value = leader(scoped, category)
+            if label:
+                parts.append(f"for {gender}, {label} leads with {value:,} {unit}")
+        return "; ".join(parts) + "." if parts else ""
+
+    def positive_rate_by_gender(data: pd.DataFrame, column: str, positive_label: str) -> str:
+        """Describe a meaningful positive outcome instead of saying Yes/No 'leads'."""
+        if data.empty or column not in data.columns or "gender_clean" not in data.columns:
+            return ""
+        parts = []
+        for gender in GENDER_ORDER:
+            if gender == MISSING:
+                continue
+            scoped = data[
+                data["gender_clean"].astype(str).eq(gender)
+                & data[column].astype(str).isin(["Yes", "No"])
+            ]
+            denominator = len(scoped)
+            if denominator < 5:
+                continue
+            positive = int(scoped[column].astype(str).eq("Yes").sum())
+            parts.append(f"{gender}: {positive:,} of {denominator:,} ({positive / denominator:.1%})")
+        if not parts:
+            return "Gender-specific rates are not shown because each available group has fewer than five valid responses."
+        return f"By gender, {positive_label} was recorded for " + "; ".join(parts) + "."
+
+    def selection_pattern(data: pd.DataFrame, category: str, noun: str) -> str:
+        if data.empty or "record_id" not in data.columns:
+            return f"No usable {noun.lower()} selections are available."
+        per_record = data.groupby("record_id").size()
+        selected_records = int(per_record.size)
+        multiple = int(per_record.gt(1).sum())
+        multiple_rate = multiple / selected_records if selected_records else 0
+        combos = (
+            data.groupby("record_id")[category]
+            .apply(lambda values: " + ".join(sorted(set(map(str, values)))))
+            .value_counts()
+        )
+        combo_text = ""
+        if not combos.empty:
+            combo_text = f" The most common recorded combination is {combos.index[0]} ({int(combos.iloc[0]):,} records)."
+        return (
+            f"The {len(data):,} {noun.lower()} mentions come from {selected_records:,} records; "
+            f"{multiple:,} ({multiple_rate:.1%}) contain more than one selection.{combo_text}"
+        )
+
+    blocks: List[Tuple[str, str]] = []
+
+    if section == "Overview":
+        camp, camp_n = leader(records, "settlement_clean")
+        age, age_n = leader(records, "age_group")
+        issue, issue_n = leader(issues, "issue_clean")
+        overall = f"The section covers {total:,} filtered records"
+        if camp:
+            overall += f"; {camp} contributes the largest camp share at {camp_n:,} ({camp_n / total:.1%})"
+        if age:
+            overall += f", and {age} is the largest age group at {age_n:,} ({age_n / total:.1%})"
+        overall += "."
+        blocks.append(("Coverage and profile", overall))
+        blocks.append(("Gender", gender_summary()))
+        if issue:
+            blocks.append(("Protection signal", f"{issue} leads the issue table with {issue_n:,} mentions. {leaders_by_gender(issues, 'issue_clean', 'mentions')}"))
+
+    elif section == "Monthly Trends":
+        dated = records.dropna(subset=["date"]).copy()
+        if dated.empty:
+            blocks.append(("Trend", "No valid dates remain for monthly analysis."))
+        else:
+            dated["period"] = dated["date"].dt.to_period("M")
+            monthly = dated.groupby("period", observed=False).size().sort_index()
+            peak = monthly.idxmax()
+            trend = f"The peak month is {peak.strftime('%b %Y')} with {int(monthly.max()):,} visits."
+            if len(monthly) >= 2 and int(monthly.iloc[-2]):
+                delta = (int(monthly.iloc[-1]) - int(monthly.iloc[-2])) / int(monthly.iloc[-2])
+                trend += f" The latest month is {abs(delta):.1%} {'higher' if delta > 0 else 'lower' if delta < 0 else 'unchanged'} than the previous month."
+            blocks.append(("Visit trend", trend))
+            latest = dated[dated["period"].eq(monthly.index[-1])]
+            blocks.append(("Latest-month gender profile", gender_summary(latest)))
+        known_first = records["first_visit_clean"].astype(str).isin(["Yes", "No"])
+        known_referral = records["referral_made_clean"].astype(str).isin(["Yes", "No"])
+        rate_text = []
+        if known_first.any():
+            rate_text.append(f"first visits are {records.loc[known_first, 'first_visit_clean'].astype(str).eq('Yes').mean():.1%} of {int(known_first.sum()):,} valid responses")
+        if known_referral.any():
+            rate_text.append(f"referrals are {records.loc[known_referral, 'referral_made_clean'].astype(str).eq('Yes').mean():.1%} of {int(known_referral.sum()):,} valid responses")
+        if rate_text:
+            blocks.append(("Service indicators", "; ".join(rate_text).capitalize() + "."))
+
+    elif section == "CPVs KPIs":
+        staff_counts = counts(records, "staff_clean")
+        if not staff_counts.empty:
+            blocks.append(("Workload", f"{len(staff_counts):,} staff / CPVs are represented; {staff_counts.index[0]} leads with {int(staff_counts.iloc[0]):,} submissions ({int(staff_counts.iloc[0]) / total:.1%})."))
+        blocks.append(("Gender reach", gender_summary()))
+        referral_by_staff = records.groupby("staff_clean", observed=False).agg(records=("record_id", "count"), referrals=("referral_made_clean", lambda s: s.astype(str).eq("Yes").sum()))
+        referral_by_staff = referral_by_staff[referral_by_staff["records"] >= 5]
+        if not referral_by_staff.empty:
+            referral_by_staff["rate"] = referral_by_staff["referrals"] / referral_by_staff["records"]
+            top = referral_by_staff["rate"].idxmax()
+            blocks.append(("Referral pattern", f"Among staff with at least five records, {top} has the highest descriptive referral rate at {referral_by_staff.loc[top, 'rate']:.1%} ({int(referral_by_staff.loc[top, 'referrals']):,} of {int(referral_by_staff.loc[top, 'records']):,})."))
+
+    elif section == "Demographics":
+        age, age_n = leader(records, "age_group")
+        blocks.append(("Population profile", f"{age} is the largest age group at {age_n:,} records ({age_n / total:.1%}). {gender_summary()}" if age else gender_summary()))
+        known = records[records["first_visit_clean"].astype(str).isin(["Yes", "No"])]
+        if not known.empty:
+            first_n = int(known["first_visit_clean"].astype(str).eq("Yes").sum())
+            blocks.append(("Visit history", f"First visits account for {first_n:,} of {len(known):,} valid responses ({first_n / len(known):.1%}). {positive_rate_by_gender(known, 'first_visit_clean', 'a first visit')}"))
+        site, site_n = leader(records, "cfs_clean")
+        if site:
+            blocks.append(("Site reach", f"{site} records the largest beneficiary volume at {site_n:,} ({site_n / total:.1%})."))
+
+    elif section == "Games & Activities":
+        game, game_n = leader(games, "game_clean")
+        if game:
+            blocks.append(("Activity profile", f"{game} leads with {game_n:,} mentions. {leaders_by_gender(games, 'game_clean', 'mentions')}"))
+        blocks.append(("Multiple activities", selection_pattern(games, "game_clean", "Activity")))
+        take5 = records[records["take5_integrated_clean"].astype(str).isin(["Yes", "No"])]
+        if not take5.empty:
+            yes_n = int(take5["take5_integrated_clean"].astype(str).eq("Yes").sum())
+            blocks.append(("Take 5", f"Take 5 integration is recorded as Yes in {yes_n:,} of {len(take5):,} valid responses ({yes_n / len(take5):.1%}). {positive_rate_by_gender(take5, 'take5_integrated_clean', 'Take 5 integration')}"))
+
+    elif section == "Protection & Support":
+        disability = records[records["disability_status_clean"].astype(str).eq("Yes")]
+        disability_type, disability_type_n = leader(disability, "disability_type_display")
+        text = f"Disability is recorded in {len(disability):,} of {total:,} records ({len(disability) / total:.1%})."
+        if disability_type:
+            text += f" {disability_type} is the leading recorded type ({disability_type_n:,})."
+        blocks.append(("Disability", text + " " + positive_rate_by_gender(records, "disability_status_clean", "living with a disability")))
+        issue, issue_n = leader(issues, "issue_clean")
+        if issue:
+            blocks.append(("Issues", f"{issue} leads with {issue_n:,} mentions. {leaders_by_gender(issues, 'issue_clean', 'mentions')} {selection_pattern(issues, 'issue_clean', 'Issue')}"))
+        support_label, support_n = leader(support, "support_clean")
+        if support_label:
+            blocks.append(("Support", f"{support_label} is the leading response with {support_n:,} mentions. {leaders_by_gender(support, 'support_clean', 'mentions')}"))
+
+    elif section == "Referrals":
+        referred = records[records["referral_made_clean"].astype(str).eq("Yes")]
+        blocks.append(("Referral rate", f"{len(referred):,} of {total:,} records are marked as referred ({len(referred) / total:.1%}). {positive_rate_by_gender(records, 'referral_made_clean', 'a referral')}"))
+        site_rates = records.groupby("cfs_clean", observed=False).agg(total=("record_id", "count"), referred=("referral_made_clean", lambda s: s.astype(str).eq("Yes").sum()))
+        site_rates = site_rates[site_rates["total"] >= 5]
+        if not site_rates.empty:
+            site_rates["rate"] = site_rates["referred"] / site_rates["total"]
+            site = site_rates["rate"].idxmax()
+            blocks.append(("Site comparison", f"Among sites with at least five records, {site} has the highest descriptive referral rate at {site_rates.loc[site, 'rate']:.1%}."))
+        destination, destination_n = leader(referred, "referral_destination_grouped")
+        agency, agency_n = leader(referred, "external_referral_agency_clean")
+        detail = []
+        if destination:
+            detail.append(f"{destination} is the leading destination ({destination_n:,})")
+        if agency:
+            detail.append(f"{agency} is the leading named external agency ({agency_n:,})")
+        if detail:
+            blocks.append(("Referral destinations", "; ".join(detail) + ". " + leaders_by_gender(referred, "referral_destination_grouped", "records")))
+
+    elif section == "Data Quality":
+        fields = {
+            "date": records["date"].notna(), "gender": ~records["gender_clean"].astype(str).isin([MISSING, REVIEW]),
+            "age": records["age_clean"].notna(), "CFS / site": ~records["cfs_clean"].astype(str).isin([MISSING, REVIEW]),
+            "location": ~records["location_clean"].astype(str).isin([MISSING, REVIEW]),
+            "first visit": records["first_visit_clean"].astype(str).isin(["Yes", "No"]),
+            "referral": records["referral_made_clean"].astype(str).isin(["Yes", "No"]),
+        }
+        completeness = sorted(((label, int(mask.sum()) / total) for label, mask in fields.items()), key=lambda item: item[1])
+        blocks.append(("Completeness", f"The lowest headline completeness is {completeness[0][0]} at {completeness[0][1]:.1%}; the highest is {completeness[-1][0]} at {completeness[-1][1]:.1%}."))
+        blocks.append(("Gender", gender_summary()))
+        schema_missing = [column for column in CORE_ANALYSIS_COLUMNS if column not in records.columns]
+        blocks.append(("Schema", "All required analysis columns are available." if not schema_missing else f"{len(schema_missing):,} required analysis columns are missing: {', '.join(schema_missing[:5])}."))
+
+    else:  # Records & Export
+        blocks.append(("Records", f"The table contains {total:,} rows after applying the current filters. {gender_summary()}"))
+        blocks.append(("Export", "The optional CSV export excludes direct identifiers, sensitive locations, device/user identifiers, notes and UUID fields."))
+
+    if not blocks:
+        return "The available filtered tables do not support a sufficiently clear descriptive finding."
+    return "\n\n".join(f"**{heading}.** {text.strip()}" for heading, text in blocks)
+
+
 def schema_readiness_table(data: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for col in CORE_ANALYSIS_COLUMNS:
@@ -2166,43 +2535,17 @@ page_header(
 
 st.sidebar.markdown("<div class='sidebar-title'>Dashboard Controls</div>", unsafe_allow_html=True)
 st.sidebar.caption(APP_VERSION)
-ctrl_col1, ctrl_col2 = st.sidebar.columns(2)
-with ctrl_col1:
-    if st.button("🔄 Reload", use_container_width=True, help="Clear cached data and reload from the configured dataset."):
-        st.cache_data.clear()
-        try:
-            PREPARED_CACHE_PATH.unlink(missing_ok=True)
-        except Exception:
-            pass
-        st.rerun()
-with ctrl_col2:
-    if st.button("♻ Reset filters", use_container_width=True, help="Clear all active filter selections."):
-        for state_key in list(st.session_state.keys()):
-            if state_key.startswith("filter_") or state_key in {"date_from_filter", "date_to_filter"}:
-                st.session_state.pop(state_key, None)
-        st.rerun()
-
-auto_sync = st.sidebar.toggle("Auto-sync dataset", value=False, help="Optional: periodically reload so updated source data is picked up. Keep off for fastest interaction.")
-refresh_minutes = st.sidebar.selectbox("Sync interval", [5, 10, 15, 30, 60], index=2, disabled=not auto_sync)
-if auto_sync:
-    # Keep the auto-refresh helper inside the sidebar so it does not create
-    # a blank iframe/gap in the main dashboard body.
-    with st.sidebar:
-        components.html(
-            f"""
-            <script>
-            const minutes = {int(refresh_minutes)};
-            setTimeout(() => {{ window.parent.location.reload(); }}, minutes * 60 * 1000);
-            </script>
-            """,
-            height=1,
-            scrolling=False,
-        )
+if st.sidebar.button("↺ Reset view", use_container_width=True, help="Clear active filters and return to the default dashboard view."):
+    for state_key in list(st.session_state.keys()):
+        if state_key.startswith("filter_") or state_key in {"date_from_filter", "date_to_filter", "dashboard_section", "dashboard_section_category"}:
+            st.session_state.pop(state_key, None)
+    st.rerun()
 
 data_path = resolve_data_path()
 source_label = ""
 source_modified = None
 
+load_started_at = time.perf_counter()
 try:
     if data_path.exists():
         source_stat = data_path.stat()
@@ -2226,11 +2569,41 @@ except Exception as exc:
     st.error(f"The dashboard data could not be loaded/prepared: {exc}")
     st.stop()
 
+load_elapsed_seconds = time.perf_counter() - load_started_at
+
 if df.empty:
     st.error("The dataset was loaded, but no analysable records remained after preparation.")
     st.info("This usually means the consent field or transformed column mapping changed. Check Data Quality → Analysis Schema Readiness after verifying the source file.")
 
 st.caption(f"Last App modified/dataset loaded: {source_modified}")
+
+with st.sidebar.expander("ℹ Data & performance status", expanded=False):
+    st.caption(f"Source: {data_path.name}")
+    st.caption(f"Workbook size: {source_stat.st_size / (1024 * 1024):.2f} MB")
+    st.caption(f"Source fingerprint: {source_fingerprint[:12]}")
+    st.caption(f"Load/cache lookup: {load_elapsed_seconds:.3f} seconds")
+    st.caption(f"Raw records: {raw_count:,}")
+    st.caption(f"Analysable records: {len(df):,}")
+    st.caption(f"Prepared cache: {'Available' if PREPARED_CACHE_PATH.exists() or PREPARED_DATA_PATH.exists() else 'Not yet created'}")
+    if st.button(
+        "Refresh data cache",
+        key="admin_refresh_data_cache",
+        use_container_width=True,
+        help="Administrator action: rebuild source and prepared-data caches.",
+    ):
+        # Preserve presentation caches while rebuilding only source data.
+        source_content_fingerprint.clear()
+        load_dashboard_data_cached.clear()
+        read_file_cached.clear()
+        try:
+            PREPARED_CACHE_PATH.unlink(missing_ok=True)
+        except Exception:
+            pass
+        st.rerun()
+
+# Reserve a persistent navigation position above the filters. The container is
+# populated after filtering so it can also show the current record count.
+section_nav_slot = st.sidebar.container()
 
 # Sidebar filters
 st.sidebar.markdown("---")
@@ -2287,11 +2660,28 @@ filter_summary_bits = [
     f"Age group: {', '.join(selected_age) if selected_age else 'All age groups'}",
     f"Disability: {', '.join(selected_disability) if selected_disability else 'All disability statuses'}",
 ]
-st.sidebar.markdown(
-    f"<div class='filter-summary'><strong>Current filter path:</strong><br>{'<br>'.join(filter_summary_bits)}</div>",
-    unsafe_allow_html=True,
-)
+with st.sidebar.expander("Current filter path", expanded=False):
+    st.markdown(
+        f"<div class='filter-summary'>{'<br>'.join(filter_summary_bits)}</div>",
+        unsafe_allow_html=True,
+    )
 st.sidebar.markdown(f"<div class='filter-result-card'><span>Filtered records</span><b>{len(filtered):,}</b></div>", unsafe_allow_html=True)
+
+with section_nav_slot:
+    st.markdown("<div class='sidebar-title'>Explore Dashboard</div>", unsafe_allow_html=True)
+    st.caption("Choose a section. Your filters remain active as you move between views.")
+    section = nav_menu(SECTION_OPTIONS)
+    active_meta = SECTION_META[section]
+    st.caption(f"{SECTION_CATEGORY[section]} · {len(filtered):,} filtered records")
+    with st.expander("How to use this dashboard", expanded=False):
+        st.markdown(
+            "1. Choose an **analysis area** and **view**.\n"
+            "2. Apply filters below; selections carry across views.\n"
+            "3. Read the section purpose shown above each analysis.\n\n"
+            "**CPV:** Community-based protection volunteer  \n"
+            "**First-visit rate:** Share recorded as visiting for the first time  \n"
+            "**Mention count:** One record may contain several selected responses"
+        )
 
 ctx_cols = ["record_id", "settlement_clean", "location_clean", "cfs_clean", "staff_clean", "gender_clean", "age_group"]
 issue_context = issue_long.merge(filtered[ctx_cols], on="record_id", how="inner") if not filtered.empty else issue_long.iloc[0:0]
@@ -2302,6 +2692,39 @@ st.markdown(
     f"<div class='record-status'>Showing {len(filtered):,} of {len(df):,} records | Date selected: {date_label}</div>",
     unsafe_allow_html=True,
 )
+
+active_filter_labels = []
+if date_label != "All available dates":
+    active_filter_labels.append(f"Date: {date_label}")
+for label, values in [
+    ("Camp", selected_camp), ("Location", selected_location), ("CFS", selected_cfs),
+    ("Staff", selected_staff), ("Gender", selected_gender), ("Age", selected_age),
+    ("Disability", selected_disability),
+]:
+    if values:
+        display_values = ", ".join(map(str, values[:2])) + (f" +{len(values) - 2}" if len(values) > 2 else "")
+        active_filter_labels.append(f"{label}: {display_values}")
+if active_filter_labels:
+    filter_chips = "".join(
+        f'<span style="display:inline-block;margin:0 .4rem .4rem 0;padding:.32rem .65rem;border-radius:999px;background:#eaf2ff;color:#172554;font-size:.82rem;font-weight:700;">{html_lib.escape(label)}</span>'
+        for label in active_filter_labels
+    )
+    st.markdown(f'<div aria-label="Active filters">{filter_chips}</div>', unsafe_allow_html=True)
+else:
+    st.caption("No additional filters applied · showing the full analysable dataset")
+
+# A concise, filter-aware warning surfaces material data-quality issues without
+# changing any analytical section or excluding additional records.
+dq_checks = {
+    "missing dates": int(filtered["date"].isna().sum()),
+    "missing CFS/site": int(filtered["cfs_clean"].astype(str).eq(MISSING).sum()),
+    "unresolved locations": int(filtered["location_clean"].astype(str).isin([MISSING, REVIEW]).sum()),
+    "invalid/missing ages": int(filtered["age_clean"].isna().sum()),
+}
+dq_alert_threshold = max(5, round(len(filtered) * 0.05)) if len(filtered) else 1
+dq_issues = [f"{count:,} {label}" for label, count in dq_checks.items() if count >= dq_alert_threshold]
+if dq_issues:
+    st.warning("Data-quality notice for the current filters: " + "; ".join(dq_issues) + ". Review the Data Quality section for details.")
 
 # KPIs
 referral_rate = filtered["referral_made_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
@@ -2342,16 +2765,33 @@ with qi4:
 with qi5:
     insight_card("Top game / activity", top_game, f"{top_game_count:,} records")
 
-section_header("Dashboard Section", "Select the analytical view you want to explore.")
-SECTION_OPTIONS = ["Overview", "Monthly Trends", "CPVs KPIs", "Demographics", "Games & Activities", "Protection & Support", "Referrals", "Data Quality", "Raw Data"]
-section = nav_menu(SECTION_OPTIONS)
+active_meta = SECTION_META[section]
+breadcrumb_col, overview_col = st.columns([5, 1])
+with breadcrumb_col:
+    st.caption(f"Dashboard › {SECTION_CATEGORY[section]} › {active_meta['label']} · {len(filtered):,} records in view")
+with overview_col:
+    if section != "Overview":
+        st.button("← Overview", key="back_to_overview", use_container_width=True, on_click=go_to_overview)
 section_intro_card(section)
+
+section_narrative = build_table_driven_narrative(section, filtered, issue_context, support_context, game_context)
+with st.expander("Findings from the current tables", expanded=(section == "Overview")):
+    st.caption("Automatically generated, filter-aware descriptive findings. They summarize observed patterns and do not establish causes.")
+    st.markdown(section_narrative)
 
 # -----------------------------------------------------------------------------
 # Sections
 # -----------------------------------------------------------------------------
 if section == "Overview":
     st.caption("Records where consent was 'No' are excluded from all dashboard analytics.")
+
+    with st.expander("Quick guide to dashboard views", expanded=False):
+        st.markdown(
+            "**Summary:** current results and change over time  \n"
+            "**People & Services:** children reached, staff delivery and activities  \n"
+            "**Protection Pathway:** reported needs, support and referrals  \n"
+            "**Data Management:** quality review, records and privacy-safe exports"
+        )
 
     st.divider()
     st.subheader("Coverage: Camp Records by Gender")
@@ -2635,7 +3075,11 @@ elif section == "Raw Data":
     ]
     display_cols = [c for c in display_cols if c in filtered.columns]
     st.dataframe(filtered[display_cols], use_container_width=True, hide_index=True)
-    st.download_button("⬇ Download filtered raw data CSV", filtered.to_csv(index=False).encode("utf-8"), file_name="filtered_cfs_data.csv", mime="text/csv", use_container_width=True)
+    st.caption("Privacy protection: names, telephone numbers, individual identifiers, device/user identifiers, GPS data, notes, and UUID fields are excluded from this download.")
+    prepare_export = st.checkbox("Prepare privacy-safe CSV download", value=False, help="CSV bytes are created only when requested, which keeps ordinary page opening faster.")
+    if prepare_export:
+        safe_filtered_export = privacy_safe_export(filtered)
+        st.download_button("⬇ Download privacy-safe filtered data CSV", safe_filtered_export.to_csv(index=False).encode("utf-8"), file_name="filtered_cfs_data_privacy_safe.csv", mime="text/csv", use_container_width=True)
 
 
 # Footer
