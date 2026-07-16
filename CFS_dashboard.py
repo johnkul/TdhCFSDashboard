@@ -948,6 +948,22 @@ def df_signature(df: pd.DataFrame) -> str:
     hashes = pd.util.hash_pandas_object(safe, index=True).values.tobytes()
     return hashlib.md5(meta + hashes).hexdigest()[:12]
 
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def source_content_fingerprint(path: str, file_size: int, modified_time_ns: int) -> str:
+    """Return a deployment-stable identity for the source workbook.
+
+    The size and timestamp are cache arguments so ordinary Streamlit reruns do
+    not reread the file.  The returned identity is based on file content, so a
+    prepared cache remains valid when a deployment changes the checkout path or
+    timestamp without changing the workbook itself.
+    """
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 # -----------------------------------------------------------------------------
 # Data loading and preparation
 # -----------------------------------------------------------------------------
@@ -1185,7 +1201,11 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
         df.loc[unresolved_first_visit, "first_visit_clean"] = df.loc[unresolved_first_visit, "first_visit_source_raw"].map(clean_first_visit)
     df["referral_made_clean"] = df["referral_made"].map(yes_no)
     df["referral_destination_grouped"] = df["referral_destination"].map(clean_referral_destination)
-    df["external_referral_agency_clean"] = df["external_referral_agency"].map(lambda v: fuzzy_harmonize(v, AGENCY_LOOKUP, cutoff=0.86))
+    # Fuzzy matching is relatively expensive. Most datasets repeat the same
+    # locations/agencies many times, so harmonise each distinct value once.
+    agency_values = df["external_referral_agency"].drop_duplicates()
+    agency_map = {value: fuzzy_harmonize(value, AGENCY_LOOKUP, cutoff=0.86) for value in agency_values}
+    df["external_referral_agency_clean"] = df["external_referral_agency"].map(agency_map)
     df["age_clean"] = df["child_age"].map(extract_numeric_age)
     df["age_group"] = df["child_age"].map(age_group)
     df["disability_type_source"] = df.apply(disability_type_source, axis=1)
@@ -1193,10 +1213,19 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     df.loc[df["disability_status_clean"].astype(str) != "Yes", "disability_type_display"] = MISSING
 
     df["settlement_clean"] = df["camp_of_information_seeking"].map(smart_title)
-    df["location_raw"] = df.apply(lambda r: first_available(r, ["camp_location_alt", "specific_camp_location", "exact_registered_location"]), axis=1)
-    df["location_clean"] = df["location_raw"].map(lambda v: fuzzy_harmonize(v, LOCATION_LOOKUP, cutoff=0.86))
-    df["cfs_raw"] = df.apply(lambda r: first_available(r, ["child_friendly_space_visited", "cfs_visited"]), axis=1)
-    df["cfs_clean"] = df["cfs_raw"].map(lambda v: fuzzy_harmonize(v, CFS_LOOKUP, cutoff=0.86))
+    location_cols = ["camp_location_alt", "specific_camp_location", "exact_registered_location"]
+    location_candidates = df[location_cols].replace(r"^\s*$", pd.NA, regex=True)
+    df["location_raw"] = location_candidates.bfill(axis=1).iloc[:, 0]
+    location_values = df["location_raw"].drop_duplicates()
+    location_map = {value: fuzzy_harmonize(value, LOCATION_LOOKUP, cutoff=0.86) for value in location_values}
+    df["location_clean"] = df["location_raw"].map(location_map)
+
+    cfs_cols = ["child_friendly_space_visited", "cfs_visited"]
+    cfs_candidates = df[cfs_cols].replace(r"^\s*$", pd.NA, regex=True)
+    df["cfs_raw"] = cfs_candidates.bfill(axis=1).iloc[:, 0]
+    cfs_values = df["cfs_raw"].drop_duplicates()
+    cfs_map = {value: fuzzy_harmonize(value, CFS_LOOKUP, cutoff=0.86) for value in cfs_values}
+    df["cfs_clean"] = df["cfs_raw"].map(cfs_map)
     df["games_played_clean"] = df.apply(clean_game, axis=1)
     df["take5_integrated_clean"] = df["take5_activities_integrated"].map(yes_no)
 
@@ -1267,16 +1296,16 @@ def prepare_data(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     return df, issue_long, support_long, game_long
 
 
-@st.cache_data(show_spinner=False, ttl=600)
-def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Read and prepare the dataset in one cached step keyed by file modified time.
+@st.cache_data(show_spinner=False, persist="disk", max_entries=8)
+def load_dashboard_data_cached(path: str, source_fingerprint: str) -> Tuple[int, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Read and prepare the dataset in one cached step keyed by file content.
 
     Performance strategy:
     1. Use a persisted prepared-data pickle where possible. This avoids reading
        and re-harmonising the Excel file after app/server restarts.
     2. Use Streamlit cache for fast in-session reruns when users change filters
        or dashboard sections.
-    3. Invalidate automatically when the source file modified time changes.
+    3. Invalidate automatically when the source file content changes.
     """
     p = Path(path)
     source_path = str(p.resolve())
@@ -1289,9 +1318,8 @@ def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd
             if (
                 payload.get("cache_version") == PREPARED_CACHE_VERSION
                 and payload.get("source_file_name") == source_file_name
-                and payload.get("source_path") == source_path
                 and payload.get("source_size") == source_size
-                and payload.get("modified_time") == modified_time
+                and payload.get("source_fingerprint") == source_fingerprint
             ):
                 return (
                     int(payload.get("raw_count", len(payload["df"]))),
@@ -1309,9 +1337,8 @@ def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd
             if (
                 payload.get("cache_version") == PREPARED_CACHE_VERSION
                 and payload.get("source_file_name") == source_file_name
-                and payload.get("source_path") == source_path
                 and payload.get("source_size") == source_size
-                and payload.get("modified_time") == modified_time
+                and payload.get("source_fingerprint") == source_fingerprint
             ):
                 return (
                     int(payload.get("raw_count", len(payload["df"]))),
@@ -1338,7 +1365,7 @@ def load_dashboard_data_cached(path: str, modified_time: float) -> Tuple[int, pd
         "source_file_name": source_file_name,
         "source_path": source_path,
         "source_size": source_size,
-        "modified_time": modified_time,
+        "source_fingerprint": source_fingerprint,
         "raw_count": raw_count,
         "df": df,
         "issue_long": issue_long,
@@ -1802,19 +1829,27 @@ def render_table(table: pd.DataFrame, title: str, key: str, precision: int = 0) 
         st.info("No records available for this table.")
         return
 
-    flat = flatten_table(table, title=title)
-    sig = df_signature(flat)
-    html_doc, height = build_professional_table_html(table, title=title, precision=precision)
+    flat, sig, html_doc, height, csv_data = cached_table_assets(table, title, precision)
     components.html(html_doc, height=height, scrolling=False)
 
     st.download_button(
         "⬇ Download table as CSV",
-        data=flat.to_csv(index=False).encode("utf-8"),
+        data=csv_data,
         file_name=f"{file_slug(title)}.csv",
         mime="text/csv",
         key=f"download_{key}_{sig}",
         use_container_width=True,
     )
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def cached_table_assets(table: pd.DataFrame, title: str, precision: int) -> Tuple[pd.DataFrame, str, str, int, bytes]:
+    """Reuse table HTML, signature, and CSV bytes across unchanged reruns."""
+    flat = flatten_table(table, title=title)
+    sig = df_signature(flat)
+    html_doc, height = build_professional_table_html(table, title=title, precision=precision)
+    csv_data = flat.to_csv(index=False).encode("utf-8")
+    return flat, sig, html_doc, height, csv_data
 
 
 def add_top_n_control(data: pd.DataFrame, category_col: str, key: str, default: int = 10) -> pd.DataFrame:
@@ -2156,10 +2191,16 @@ source_modified = None
 
 try:
     if data_path.exists():
-        modified_time = data_path.stat().st_mtime
+        source_stat = data_path.stat()
+        modified_time = source_stat.st_mtime
         source_label = f"Source file: {data_path}"
         source_modified = time.strftime("%d %b %Y %H:%M", time.localtime(modified_time))
-        raw_count, df, issue_long, support_long, game_long = load_dashboard_data_cached(str(data_path), modified_time)
+        source_fingerprint = source_content_fingerprint(
+            str(data_path), source_stat.st_size, source_stat.st_mtime_ns
+        )
+        raw_count, df, issue_long, support_long, game_long = load_dashboard_data_cached(
+            str(data_path), source_fingerprint
+        )
     else:
         st.error("No dashboard data file was found on the server.")
         st.info(
