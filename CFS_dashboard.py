@@ -50,7 +50,7 @@ CSS_PATH = BASE_DIR / "assets" / "styles.css"
 APP_VERSION = "Version 1.0 · June 2026 · Build v12"
 PREPARED_DATA_PATH = DATA_DIR / "cfs_dashboard_prepared.pkl"
 PREPARED_CACHE_PATH = BASE_DIR / ".cfs_dashboard_prepared_cache.pkl"
-PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v15"
+PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v16"
 
 RAW_TO_TRANSFORMED_COLUMNS = {
     # System / metadata columns
@@ -2597,6 +2597,23 @@ except Exception as exc:
     st.stop()
 
 load_elapsed_seconds = time.perf_counter() - load_started_at
+
+# Enforce the approved age taxonomy after every load, including loads served
+# from a prepared pickle or Streamlit's persisted cache. This prevents legacy
+# age-band labels from resurfacing in any filter, table, chart, or narrative,
+# even if an older transformed frame is encountered.
+if not df.empty:
+    if "age_clean" in df.columns:
+        enforced_age_groups = df["age_clean"].map(age_group)
+    elif "child_age" in df.columns:
+        enforced_age_groups = df["child_age"].map(age_group)
+    else:
+        enforced_age_groups = pd.Series(MISSING, index=df.index)
+    df["age_group"] = pd.Categorical(
+        enforced_age_groups.astype(str),
+        categories=AGE_GROUP_ORDER,
+        ordered=True,
+    )
 
 if df.empty:
     st.error("The dataset was loaded, but no analysable records remained after preparation.")
