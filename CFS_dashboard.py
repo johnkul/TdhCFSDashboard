@@ -3033,6 +3033,40 @@ elif section == "Games & Activities":
     bar_chart(gchart, "Count", "game_clean", "gender_clean", "Games / activities by gender", horizontal=True, height=680)
 
     st.divider()
+    st.subheader("Take 5 Activities for Participants with Disabilities")
+    st.caption(
+        "Uses the same activity mentions as the Games / Activities Engagement "
+        "table, retaining the harmonized Take 5 activity and only participants "
+        "recorded as living with disability. The separate integration Yes/No "
+        "field is not used for this table."
+    )
+    disability_participant_ids = set(
+        filtered.loc[
+            filtered["disability_status_clean"].astype(str).eq("Yes"),
+            "record_id",
+        ].astype(str)
+    )
+    take5_disability_games = game_context[
+        game_context["record_id"].astype(str).isin(disability_participant_ids)
+        & game_context["game_clean"].astype(str).eq("Take 5")
+    ].copy()
+    if take5_disability_games.empty:
+        st.info(
+            "No harmonized Take 5 activity mentions for participants with "
+            "disabilities match the current filters."
+        )
+    else:
+        render_table(
+            table_with_total(
+                take5_disability_games,
+                ["game_clean"],
+                ["gender_clean"],
+            ),
+            "Take 5 Activities for Participants with Disabilities by Gender",
+            "take5_disability_games",
+        )
+
+    st.divider()
     st.subheader("Take 5 Integration into Play Sessions")
     st.caption("This uses the new survey field: 'Was Take 5 activities integrated into play sessions?'")
     take5_scope = filtered[filtered["take5_integrated_clean"].astype(str).isin(["Yes", "No"])].copy()
