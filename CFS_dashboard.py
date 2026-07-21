@@ -50,7 +50,7 @@ CSS_PATH = BASE_DIR / "assets" / "styles.css"
 APP_VERSION = "Version 1.0 · June 2026 · Build v12"
 PREPARED_DATA_PATH = DATA_DIR / "cfs_dashboard_prepared.pkl"
 PREPARED_CACHE_PATH = BASE_DIR / ".cfs_dashboard_prepared_cache.pkl"
-PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v13"
+PREPARED_CACHE_VERSION = "cfs-dashboard-prepared-v15"
 
 RAW_TO_TRANSFORMED_COLUMNS = {
     # System / metadata columns
@@ -182,7 +182,15 @@ RAW_TO_TRANSFORMED_COLUMNS.update({col: col for col in ANALYSIS_COLUMN_NAMES})
 
 MISSING = "Missing / unspecified"
 REVIEW = "Needs review"
-AGE_GROUP_ORDER = ["0-5 years", "6-12 years", "13-17 years", MISSING]
+AGE_GROUP_ORDER = [
+    "0-4 years",
+    "5-11 years",
+    "12-17 years",
+    "18-24 years",
+    "25-49 years",
+    "50 years and above",
+    MISSING,
+]
 YES_NO_ORDER = ["Yes", "No", MISSING]
 GENDER_ORDER = ["Girls", "Boys", "Transgender", MISSING]
 TOP_N_OPTIONS = [5, 10, 15, 25]
@@ -847,9 +855,22 @@ def extract_numeric_age(value):
     num = pd.to_numeric(value, errors="coerce")
     if pd.notna(num):
         return float(num)
-    m = re.search(r"(\d+)\D+(\d+)", str(value))
-    if m:
-        return (int(m.group(1)) + int(m.group(2))) / 2
+
+    # The source column contains both individual ages (for example, "7 yrs")
+    # and pre-grouped responses (for example, "5-11 yrs"). Use the midpoint
+    # for a stated range so it is assigned to the matching canonical band.
+    text = str(value).strip().lower()
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?)", text)
+    if range_match:
+        lower = float(range_match.group(1))
+        upper = float(range_match.group(2))
+        return (lower + upper) / 2
+
+    # Handle textual single-age values and open-ended bands such as
+    # "50 yrs and above", "50+", or "aged 18 years".
+    single_age_match = re.search(r"\d+(?:\.\d+)?", text)
+    if single_age_match:
+        return float(single_age_match.group(0))
     return None
 
 
@@ -857,12 +878,18 @@ def age_group(value) -> str:
     age = extract_numeric_age(value)
     if age is None:
         return MISSING
-    if 0 <= age <= 5:
-        return "0-5 years"
-    if 6 <= age <= 12:
-        return "6-12 years"
-    if 13 <= age <= 17:
-        return "13-17 years"
+    if 0 <= age < 5:
+        return "0-4 years"
+    if 5 <= age < 12:
+        return "5-11 years"
+    if 12 <= age < 18:
+        return "12-17 years"
+    if 18 <= age < 25:
+        return "18-24 years"
+    if 25 <= age < 50:
+        return "25-49 years"
+    if age >= 50:
+        return "50 years and above"
     return MISSING
 
 
@@ -2726,44 +2753,47 @@ dq_issues = [f"{count:,} {label}" for label, count in dq_checks.items() if count
 if dq_issues:
     st.warning("Data-quality notice for the current filters: " + "; ".join(dq_issues) + ". Review the Data Quality section for details.")
 
-# KPIs
-referral_rate = filtered["referral_made_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
-first_visit_rate = filtered["first_visit_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
-disability_rate = filtered["disability_status_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
-avg_age = filtered["age_clean"].mean() if len(filtered) else None
+# The complete landing-page summary appears only on Overview. Other sections
+# already retain the compact record/date status and active-filter chips above,
+# allowing users to reach section-specific analysis without repeated scrolling.
+if section == "Overview":
+    referral_rate = filtered["referral_made_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
+    first_visit_rate = filtered["first_visit_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
+    disability_rate = filtered["disability_status_clean"].astype(str).eq("Yes").mean() if len(filtered) else 0
+    avg_age = filtered["age_clean"].mean() if len(filtered) else None
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-with k1:
-    metric_card("Total CFS visits", f"{len(filtered):,}", "Filtered records", "primary")
-with k2:
-    metric_card("Referral rate", f"{referral_rate:.1%}", "Referral marked Yes", "success")
-with k3:
-    metric_card("First visit rate", f"{first_visit_rate:.1%}", "First visit marked Yes", "primary")
-with k4:
-    metric_card("Disability prevalence", f"{disability_rate:.1%}", "Children recorded as Yes", "warning")
-with k5:
-    metric_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count", "warning")
-with k6:
-    metric_card("Avg child age", f"{avg_age:.1f}" if pd.notna(avg_age) else "N/A", "Years", "neutral")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    with k1:
+        metric_card("Total CFS visits", f"{len(filtered):,}", "Filtered records", "primary")
+    with k2:
+        metric_card("Referral rate", f"{referral_rate:.1%}", "Referral marked Yes", "success")
+    with k3:
+        metric_card("First visit rate", f"{first_visit_rate:.1%}", "First visit marked Yes", "primary")
+    with k4:
+        metric_card("Disability prevalence", f"{disability_rate:.1%}", "Children recorded as Yes", "warning")
+    with k5:
+        metric_card("Issue mentions", f"{len(issue_context):,}", "Multi-response count", "warning")
+    with k6:
+        metric_card("Avg child age", f"{avg_age:.1f}" if pd.notna(avg_age) else "N/A", "Years", "neutral")
 
-section_header("Quick Insights", "Fast outlook for the currently filtered dataset.")
-qi1, qi2, qi3, qi4, qi5 = st.columns(5)
-top_camp, top_camp_count = top_category(filtered, "settlement_clean", [MISSING])
-top_site, top_site_count = top_category(filtered, "cfs_clean", [MISSING])
-top_staff, top_staff_count = top_category(filtered, "staff_clean", [MISSING])
-top_issue, top_issue_count = top_category(issue_context, "issue_clean", [MISSING])
-top_game, top_game_count = top_category(game_context, "game_clean", [MISSING])
-staff_represented = filtered.loc[~filtered["staff_clean"].astype(str).isin([MISSING, REVIEW]), "staff_clean"].nunique() if "staff_clean" in filtered.columns else 0
-with qi1:
-    insight_card("Camp with most records", top_camp, f"{top_camp_count:,} records")
-with qi2:
-    insight_card("Leading CFS / site", top_site, f"{top_site_count:,} records")
-with qi3:
-    insight_card("Staff represented", f"{staff_represented:,}", f"Top: {top_staff} ({top_staff_count:,})")
-with qi4:
-    insight_card("Most reported issue", top_issue, f"{top_issue_count:,} mentions")
-with qi5:
-    insight_card("Top game / activity", top_game, f"{top_game_count:,} records")
+    section_header("Quick Insights", "Fast outlook for the currently filtered dataset.")
+    qi1, qi2, qi3, qi4, qi5 = st.columns(5)
+    top_camp, top_camp_count = top_category(filtered, "settlement_clean", [MISSING])
+    top_site, top_site_count = top_category(filtered, "cfs_clean", [MISSING])
+    top_staff, top_staff_count = top_category(filtered, "staff_clean", [MISSING])
+    top_issue, top_issue_count = top_category(issue_context, "issue_clean", [MISSING])
+    top_game, top_game_count = top_category(game_context, "game_clean", [MISSING])
+    staff_represented = filtered.loc[~filtered["staff_clean"].astype(str).isin([MISSING, REVIEW]), "staff_clean"].nunique() if "staff_clean" in filtered.columns else 0
+    with qi1:
+        insight_card("Camp with most records", top_camp, f"{top_camp_count:,} records")
+    with qi2:
+        insight_card("Leading CFS / site", top_site, f"{top_site_count:,} records")
+    with qi3:
+        insight_card("Staff represented", f"{staff_represented:,}", f"Top: {top_staff} ({top_staff_count:,})")
+    with qi4:
+        insight_card("Most reported issue", top_issue, f"{top_issue_count:,} mentions")
+    with qi5:
+        insight_card("Top game / activity", top_game, f"{top_game_count:,} records")
 
 active_meta = SECTION_META[section]
 breadcrumb_col, overview_col = st.columns([5, 1])
@@ -2903,9 +2933,54 @@ elif section == "Demographics":
 
     st.divider()
     st.subheader("Age Group Breakdown by Gender")
-    render_table(table_with_total(filtered, ["age_group"], ["gender_clean"]), "Age Group by Gender", "age_gender")
-    achart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
-    bar_chart(achart, "age_group", "Count", "gender_clean", "Age group distribution by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
+    st.caption(
+        "Uses the same valid First Visit and Repeat Visit records as the CFS / Site "
+        "table above, with age group replacing CFS / site as the row dimension."
+    )
+    render_table(
+        table_with_total(fvr, ["age_group"], ["visit_type", "gender_clean"]),
+        "First Visit and Repeat Visit by Age Group and Gender",
+        "age_gender",
+    )
+    achart = count_table(fvr, ["age_group", "visit_type"], order_col="age_group")
+    bar_chart(
+        achart,
+        "age_group",
+        "Count",
+        "visit_type",
+        "First and repeat visits by age group",
+        category_orders={
+            "age_group": AGE_GROUP_ORDER,
+            "visit_type": ["First visit", "Repeat visit"],
+        },
+    )
+
+    st.divider()
+    st.subheader(
+        "Disability Prevalence by Age Group for First Visit and Repeat Visit by CFS / Site"
+    )
+    st.caption(
+        "Uses the same valid First Visit and Repeat Visit records as the CFS / Site "
+        "analysis, then retains only children recorded as living with disability."
+    )
+    disability_fvr_age = fvr[
+        fvr["disability_status_clean"].astype(str).eq("Yes")
+    ].copy()
+    if disability_fvr_age.empty:
+        st.info(
+            "No children with disability and a valid First/Repeat Visit response "
+            "match the current filters."
+        )
+    else:
+        render_table(
+            table_with_total(
+                disability_fvr_age,
+                ["age_group"],
+                ["visit_type", "gender_clean"],
+            ),
+            "Disability: First and Repeat Visits by Age Group and Gender",
+            "disability_first_repeat_age_gender",
+        )
 
 elif section == "Games & Activities":
     st.subheader("Games / Activities Engagement")
@@ -2950,6 +3025,24 @@ elif section == "Protection & Support":
     render_table(table_with_total(filtered, ["disability_status_clean"], ["gender_clean"]), "Disability Prevalence", "disability")
     dchart = count_table(filtered, ["disability_status_clean", "gender_clean"])
     bar_chart(dchart, "Count", "disability_status_clean", "gender_clean", "Disability prevalence by gender", horizontal=True, height=360)
+
+    st.divider()
+    st.subheader("Disability Prevalence by Age Group")
+    st.caption(
+        "Includes only children recorded as living with disability. Children "
+        "recorded as No or with a missing disability response are excluded."
+    )
+    disability_age = filtered[
+        filtered["disability_status_clean"].astype(str).eq("Yes")
+    ].copy()
+    if disability_age.empty:
+        st.info("No children with disability match the current filters.")
+    else:
+        render_table(
+            table_with_total(disability_age, ["age_group"], ["gender_clean"]),
+            "Disability Prevalence by Age Group and Gender",
+            "disability_age_gender",
+        )
 
     st.divider()
     st.subheader("Type of Disability")
