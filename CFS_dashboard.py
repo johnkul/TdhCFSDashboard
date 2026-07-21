@@ -2836,7 +2836,33 @@ if section == "Overview":
     age_table = table_with_total(filtered, ["age_group"], ["gender_clean"])
     render_table(age_table, "Age Group by Gender", "overview_age")
     age_chart = count_table(filtered, ["age_group", "gender_clean"], order_col="age_group")
-    bar_chart(age_chart, "age_group", "Count", "gender_clean", "Overview: age group by gender", category_orders={"age_group": AGE_GROUP_ORDER, "gender_clean": GENDER_ORDER})
+    if not age_chart.empty:
+        # Plotly renders plain strings more reliably than pandas categorical
+        # values after the expanded age-band ordering is applied.
+        age_chart = age_chart.copy()
+        age_chart["age_group"] = age_chart["age_group"].astype(str)
+        age_chart["gender_clean"] = age_chart["gender_clean"].astype(str)
+        age_chart = age_chart[
+            age_chart["age_group"].isin(
+                [value for value in AGE_GROUP_ORDER if value != MISSING]
+            )
+            & age_chart["gender_clean"].isin(
+                [value for value in GENDER_ORDER if value != MISSING]
+            )
+            & age_chart["Count"].gt(0)
+        ].copy()
+    bar_chart(
+        age_chart,
+        "age_group",
+        "Count",
+        "gender_clean",
+        "Overview: age group by gender",
+        height=480,
+        category_orders={
+            "age_group": [value for value in AGE_GROUP_ORDER if value != MISSING],
+            "gender_clean": [value for value in GENDER_ORDER if value != MISSING],
+        },
+    )
 
     st.divider()
     st.subheader("Protection: Top Reported Issues")
